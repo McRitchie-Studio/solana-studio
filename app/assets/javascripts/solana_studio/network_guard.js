@@ -114,14 +114,36 @@
   // Error shapes a cluster mismatch would explain, ranked by how much of the
   // message the mismatch actually accounts for.
   //
-  // LIKELY — the wallet simulated against a chain where our program or accounts
-  // do not exist. These messages have essentially no other cause in a flow that
-  // worked yesterday.
+  // UNRELATED, AND CHECKED FIRST. A custom program error means the program RAN:
+  // it was found, on a chain that has it, and it rejected the instruction on its
+  // own terms. Whatever else the envelope says, a cluster mismatch cannot explain
+  // that outcome.
+  //
+  // This precedence is the fix for a real inversion. "Transaction simulation
+  // failed" is the WRAPPER Solana puts around every failed simulation, including
+  // ordinary business rejections, so matching it as LIKELY classified
+  //
+  //   "Transaction simulation failed: Error processing Instruction 0:
+  //    custom program error: 0x1770"
+  //
+  // — a plain "contest is full" — as a probable network problem at top
+  // confidence. That sends a user to change their wallet's network over a full
+  // contest: the exact wrong-thing-to-fix this feature exists to prevent, with the
+  // feature's own voice behind it. Found in review by executing this file.
+  var PROGRAM_ERROR = [
+    /custom program error/i,
+    /error processing instruction/i,
+    /\b0x1[0-9a-f]{3}\b/i,          // Anchor's 6000+ user error range, as hex
+    /\bAnchorError\b/i
+  ];
+
+  // LIKELY — the wallet looked for our program or our blockhash on a chain that
+  // does not have them. Each of these names a thing that WAS NOT FOUND, which is
+  // what a wrong chain actually produces; none of them is a wrapper.
   var LIKELY = [
     /attempt to load a program that does not exist/i,
     /program that does not exist/i,
     /ProgramAccountNotFound/i,
-    /transaction simulation failed/i,
     /unlikely to succeed/i,
     /blockhash not found/i
   ];
@@ -134,7 +156,10 @@
     /^unexpected error$/i,
     /^unexpected/i,
     /user rejected/i,
-    /user declined/i
+    /user declined/i,
+    // The bare wrapper, with no program error to account for it. Genuinely
+    // ambiguous — worth a hint, never worth top confidence.
+    /transaction simulation failed/i
   ];
 
   function messageOf(err) {
@@ -154,6 +179,11 @@
     if (!msg) return "unrelated";
 
     var i;
+    // Precedence, not just membership: a program error is checked BEFORE the
+    // LIKELY list, because the wrapper text can carry both.
+    for (i = 0; i < PROGRAM_ERROR.length; i++) {
+      if (PROGRAM_ERROR[i].test(msg)) return "unrelated";
+    }
     for (i = 0; i < LIKELY.length; i++) {
       if (LIKELY[i].test(msg)) return "likely";
     }

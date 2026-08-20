@@ -60,14 +60,13 @@ class NetworkTest < Minitest::Test
 
   def test_alignment_confirms_a_matching_genesis
     assert_equal :aligned, N.alignment(cluster: "devnet", genesis_hash: DEVNET_GENESIS)
-    assert N.aligned?(cluster: "mainnet-beta", genesis_hash: MAINNET_GENESIS)
+    assert_equal :aligned, N.alignment(cluster: "mainnet-beta", genesis_hash: MAINNET_GENESIS)
   end
 
   def test_alignment_flags_a_different_known_chain
     # The dangerous case: SOLANA_NETWORK says mainnet, the RPC answered with
     # devnet's genesis. This must be distinguishable from "cannot check".
     assert_equal :mismatched, N.alignment(cluster: "mainnet-beta", genesis_hash: DEVNET_GENESIS)
-    refute N.aligned?(cluster: "mainnet-beta", genesis_hash: DEVNET_GENESIS)
   end
 
   def test_alignment_is_unverifiable_rather_than_mismatched_without_a_pin
@@ -80,10 +79,17 @@ class NetworkTest < Minitest::Test
     assert_equal :unverifiable, N.alignment(cluster: "devnet", genesis_hash: "  ")
   end
 
-  def test_unverifiable_is_not_truthy_through_aligned
-    # Guards the collapse directly: a host writing `raise unless aligned?` must
-    # not be told localnet is fine.
-    refute N.aligned?(cluster: "localnet", genesis_hash: "anything")
+  def test_there_is_no_boolean_that_collapses_the_third_state
+    # An `aligned?` convenience existed and was REMOVED in review. It answered
+    # false for :unverifiable, so the obvious host spelling — `raise unless
+    # aligned?` — would refuse to boot against a local validator, which is exactly
+    # the mistake alignment's own doc-comment warns about. The wrapper meant to
+    # save callers from the collapse WAS the collapse.
+    #
+    # Asserted so it cannot come back by convenience: three states, three branches.
+    refute_respond_to N, :aligned?,
+                      "a boolean cannot carry three states — callers must branch on alignment"
+    assert_equal :unverifiable, N.alignment(cluster: "localnet", genesis_hash: "whateverThisBootMinted")
   end
 
   def test_expected_for_environment_maps_production_to_mainnet

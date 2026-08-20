@@ -110,7 +110,7 @@ class NetworkGuardJsTest < Minitest::Test
     assert_equal true, result["inputUntouched"]
   end
 
-  def test_simulation_failures_classify_as_likely
+  def test_not_found_failures_classify_as_likely
     msgs = [
       "Transaction simulation failed: Attempt to load a program that does not exist",
       "ProgramAccountNotFound",
@@ -121,11 +121,12 @@ class NetworkGuardJsTest < Minitest::Test
     assert_equal %w[likely likely likely], got
   end
 
-  def test_ordering_puts_simulation_failure_in_likely_not_possible
-    # The regression this guards: /^unexpected/ in POSSIBLE is broad, and a
-    # reordering that let it run first would demote every simulation failure.
+  def test_a_not_found_program_outranks_the_broad_unexpected_rule
+    # /^unexpected/ in POSSIBLE is broad, and a reordering that let it run first
+    # would demote a real wrong-chain signal to a shrug.
     assert_equal "likely",
-                 run_js(DEVNET_QA, 'return SolanaStudio.network.classify("Unexpected error: Transaction simulation failed");')
+                 run_js(DEVNET_QA,
+                        'return SolanaStudio.network.classify("Unexpected error: Attempt to load a program that does not exist");')
   end
 
   def test_ambiguous_wallet_errors_classify_as_possible
@@ -141,12 +142,48 @@ class NetworkGuardJsTest < Minitest::Test
     # The under-claim guarantee. An insufficient-funds error must never be
     # dressed up as a network problem — that sends the user to fix the wrong
     # thing, which is the exact bug this feature exists to remove.
+    #
+    # THE ENVELOPES ARE REAL. An earlier version of this test asserted the bare
+    # string "0x1774", which no wallet ever emits — green, honest, and testing a
+    # message nobody sends. A program error arrives WRAPPED, and the wrapper is
+    # the whole difficulty (see the ordering test below).
     got = run_js(DEVNET_QA, <<~JS)
-      return ["Insufficient USDC balance.", "Contest is full.", "0x1774", ""]
-        .map(function(m) { return SolanaStudio.network.classify(m); });
+      return [
+        "Insufficient USDC balance.",
+        "Transaction simulation failed: Error processing Instruction 0: custom program error: 0x1774",
+        "AnchorError caused by account: vault. Error Code: ConstraintSeeds. Error Number: 2006.",
+        ""
+      ].map(function(m) { return SolanaStudio.network.classify(m); });
     JS
 
     assert_equal %w[unrelated unrelated unrelated unrelated], got
+  end
+
+  # THE INVERSION THIS GUARDS, found in review by executing the shipped file.
+  #
+  # "Transaction simulation failed" is the wrapper Solana puts around EVERY failed
+  # simulation, ordinary business rejections included. While that wrapper was in
+  # the LIKELY list, a plain "contest is full" classified as a probable network
+  # problem at TOP confidence — telling a user to change their wallet's network
+  # over a full contest, in this feature's own voice. Precedence fixes it: a
+  # custom program error means the program RAN, on a chain that has it.
+  def test_a_program_error_outranks_the_simulation_wrapper
+    got = run_js(DEVNET_QA, <<~JS)
+      return {
+        business: SolanaStudio.network.classify(
+          "Transaction simulation failed: Error processing Instruction 0: custom program error: 0x1770"),
+        wrongChain: SolanaStudio.network.classify(
+          "Transaction simulation failed: Attempt to load a program that does not exist"),
+        bareWrapper: SolanaStudio.network.classify("Transaction simulation failed")
+      };
+    JS
+
+    assert_equal "unrelated", got["business"],
+                 "a program error means the program RAN — a wrong chain cannot explain it"
+    assert_equal "likely", got["wrongChain"],
+                 "the same wrapper around a NOT-FOUND program is still the real signal"
+    assert_equal "possible", got["bareWrapper"],
+                 "the bare wrapper is ambiguous — a hint, never top confidence"
   end
 
   def test_explain_returns_null_for_an_unrelated_error
@@ -155,13 +192,16 @@ class NetworkGuardJsTest < Minitest::Test
 
   def test_explain_carries_the_original_message_verbatim
     hint = run_js(DEVNET_QA, <<~JS)
-      return SolanaStudio.network.explain("Transaction simulation failed", { action: "Entering this contest" });
+      return SolanaStudio.network.explain(
+        "Transaction simulation failed: Attempt to load a program that does not exist",
+        { action: "Entering this contest" });
     JS
 
     assert_equal "likely", hint["confidence"]
     assert_equal "Devnet", hint["networkLabel"]
     assert_equal "QA", hint["environmentLabel"]
-    assert_equal "Transaction simulation failed", hint["originalMessage"]
+    assert_equal "Transaction simulation failed: Attempt to load a program that does not exist",
+                 hint["originalMessage"]
     assert_includes hint["message"], "Devnet"
     assert_includes hint["message"], "QA"
   end
@@ -177,7 +217,7 @@ class NetworkGuardJsTest < Minitest::Test
     result = run_js(DEVNET_QA, <<~JS)
       var seen = null;
       return SolanaStudio.network.guard(
-        function() { return Promise.reject(new Error("Transaction simulation failed")); },
+        function() { return Promise.reject(new Error("Transaction simulation failed: Attempt to load a program that does not exist")); },
         { action: "Entering", onHint: function(h) { seen = h.confidence; } }
       ).then(
         function() { return { settled: "resolved" }; },
@@ -186,7 +226,7 @@ class NetworkGuardJsTest < Minitest::Test
     JS
 
     assert_equal "rejected", result["settled"]
-    assert_equal "Transaction simulation failed", result["message"]
+    assert_equal "Transaction simulation failed: Attempt to load a program that does not exist", result["message"]
     assert_equal "likely", result["hint"]
   end
 

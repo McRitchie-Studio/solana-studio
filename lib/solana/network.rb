@@ -16,8 +16,10 @@ module Solana
   # sign-in, by handing the wallet name #3 and letting it object).
   #
   # This module is deliberately Rails-free and RPC-free — it is a lookup table
-  # with opinions. Fetching the live genesis hash is Solana::Client#get_genesis_hash;
-  # deciding what to DO about a mismatch belongs to the host.
+  # with opinions. Fetching the live genesis hash is the HOST's job — the RPC call
+  # is `getGenesisHash`, which this gem's Solana::Client does not wrap today (turf
+  # monster adds it in an initializer); deciding what to DO about a mismatch is the
+  # host's too.
   module Network
     # Canonical cluster names, as Solana's own tooling spells them. Note
     # "mainnet-beta" — the hyphenated form is the real one; "mainnet" is an
@@ -52,6 +54,9 @@ module Solana
       MAINNET  => "solana:mainnet",
       DEVNET   => "solana:devnet",
       TESTNET  => "solana:testnet",
+      # localnet is a valid Wallet Standard chain, but NOT a valid SIWS chainId —
+      # no wallet can verify a sign-in against a chain only your machine has. It is
+      # here for completeness of the chain table; do not send it as a chainId.
       LOCALNET => "solana:localnet"
     }.freeze
 
@@ -139,16 +144,19 @@ module Solana
     # cluster name). Callers must not collapse :unverifiable into either of the
     # other two — refusing to boot on localnet is as wrong as trusting a
     # mainnet RPC that answered with a devnet genesis.
+    #
+    # THERE IS DELIBERATELY NO `aligned?` BOOLEAN. One existed and was removed in
+    # review: it answered `false` for :unverifiable, so a host writing the obvious
+    # `raise unless aligned?` would refuse to boot against a local validator —
+    # precisely the mistake the paragraph above warns about, re-introduced by the
+    # convenience wrapper meant to save callers from it. Three states, three
+    # branches; the caller decides what :unverifiable means for them.
     def alignment(cluster:, genesis_hash:)
       expected = self.genesis_hash(cluster)
       return :unverifiable if expected.nil?
       return :unverifiable if genesis_hash.nil? || genesis_hash.to_s.strip.empty?
 
       genesis_hash.to_s.strip == expected ? :aligned : :mismatched
-    end
-
-    def aligned?(cluster:, genesis_hash:)
-      alignment(cluster: cluster, genesis_hash: genesis_hash) == :aligned
     end
 
     # Everything a UI needs to explain a network to a person, in one hash.

@@ -67,8 +67,16 @@ class GemspecTest < Minitest::Test
     # than one literal rather than guess which is real. A second one (a
     # commented-out old line, a MINIMUM_VERSION) strands the release with a
     # fix-this-by-hand instruction.
-    literals = File.read(File.join(ROOT, "lib/solana_studio/version.rb"))
-                   .scan(/^\s*VERSION\s*=/)
+    # THE CONDUCTOR'S OWN REGEX, not a proxy for it. This asserted
+    # /^\s*VERSION\s*=/ — anchored and uppercase-only — while
+    # Release::GemVersion::VERSION_LITERAL is case-INSENSITIVE and UNANCHORED and
+    # counts every match in the file. A comment in this file carrying a quoted
+    # `version = "…"` would leave the old assertion green while the conductor
+    # counted two and refused to rewrite, stranding the release. Copied because a
+    # gem cannot depend on the hub; keep it in sync with
+    # mcritchie-studio/app/models/release/gem_version.rb.
+    conductor_regex = /version\s*=\s*["']([\w.\-]+)["']/i
+    literals = File.read(File.join(ROOT, "lib/solana_studio/version.rb")).scan(conductor_regex)
 
     assert_equal 1, literals.length,
                  "the version file must declare exactly one literal for the release conductor to rewrite"
