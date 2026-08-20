@@ -113,12 +113,16 @@ class NetworkGuardJsTest < Minitest::Test
   def test_not_found_failures_classify_as_likely
     msgs = [
       "Transaction simulation failed: Attempt to load a program that does not exist",
+      # The WRAPPED form — how Solana actually delivers it. Every message in this
+      # list omitted the instruction envelope until review caught that the suite
+      # therefore never exercised the real envelope at all.
+      "Transaction simulation failed: Error processing Instruction 0: Attempt to load a program that does not exist",
       "ProgramAccountNotFound",
       "failed to send transaction: Blockhash not found"
     ]
     got = run_js(DEVNET_QA, "return #{JSON.generate(msgs)}.map(function(m) { return SolanaStudio.network.classify(m); });")
 
-    assert_equal %w[likely likely likely], got
+    assert_equal %w[likely likely likely likely], got
   end
 
   def test_a_not_found_program_outranks_the_broad_unexpected_rule
@@ -167,23 +171,79 @@ class NetworkGuardJsTest < Minitest::Test
   # problem at TOP confidence — telling a user to change their wallet's network
   # over a full contest, in this feature's own voice. Precedence fixes it: a
   # custom program error means the program RAN, on a chain that has it.
-  def test_a_program_error_outranks_the_simulation_wrapper
+  # ONE VARIABLE AT A TIME. The first version of this test put
+  # "Error processing Instruction 0:" in the business arm and left it OUT of the
+  # wrong-chain arm, so the two differed in two ways at once and could not isolate
+  # which rule drove either verdict. The wrong one did: the instruction envelope
+  # was deciding, and every wrong-network string in this file omitted it, so 111
+  # green tests never touched the case the feature exists for. Both arms now carry
+  # the IDENTICAL envelope and differ only in the tail.
+  def test_the_program_code_decides_not_the_envelope_around_it
     got = run_js(DEVNET_QA, <<~JS)
+      var envelope = "Transaction simulation failed: Error processing Instruction 0: ";
       return {
-        business: SolanaStudio.network.classify(
-          "Transaction simulation failed: Error processing Instruction 0: custom program error: 0x1770"),
-        wrongChain: SolanaStudio.network.classify(
-          "Transaction simulation failed: Attempt to load a program that does not exist"),
+        business:   SolanaStudio.network.classify(envelope + "custom program error: 0x1770"),
+        wrongChain: SolanaStudio.network.classify(envelope + "Attempt to load a program that does not exist"),
+        bareEnvelope: SolanaStudio.network.classify(envelope + "invalid account data for instruction"),
         bareWrapper: SolanaStudio.network.classify("Transaction simulation failed")
       };
     JS
 
     assert_equal "unrelated", got["business"],
-                 "a program error means the program RAN — a wrong chain cannot explain it"
+                 "a program CODE means the program ran — a wrong chain cannot explain it"
     assert_equal "likely", got["wrongChain"],
-                 "the same wrapper around a NOT-FOUND program is still the real signal"
+                 "the SAME envelope around a NOT-FOUND program is still the real signal"
+    assert_equal "unrelated", got["bareEnvelope"],
+                 "an instruction error with no program code and no not-found signal explains itself"
     assert_equal "possible", got["bareWrapper"],
-                 "the bare wrapper is ambiguous — a hint, never top confidence"
+                 "the bare simulation wrapper is ambiguous — a hint, never top confidence"
+  end
+
+  # DEFENSIVE, and labelled as such rather than dressed up as observed.
+  #
+  # Verified against solana-sdk's transaction-error source: ProgramAccountNotFound
+  # renders TOP-LEVEL — only InstructionError carries the "Error processing
+  # Instruction {i}:" wrapper — and our own captured corpus has never wrapped a
+  # not-found. So this composed string is a shape Solana is not known to emit, and
+  # saying so is the point: the LAST two defects in this classifier were both
+  # tests asserting messages nobody sends. It is kept because ordering correctly
+  # costs nothing and the rule it pins is general (a wrapper must never decide
+  # confidence), not because it reproduces a field failure.
+  def test_defensive_a_wrapped_not_found_is_still_not_silenced
+    wrapped = "Transaction simulation failed: Error processing Instruction 0: " \
+              "Attempt to load a program that does not exist"
+    hint = run_js(DEVNET_QA, "return SolanaStudio.network.explain(#{wrapped.inspect});")
+
+    refute_nil hint, "an envelope must never silence a not-found signal it merely wraps"
+    assert_equal "likely", hint["confidence"]
+  end
+
+  # OBSERVED, by contrast — this one is a real string with a real taxonomy behind
+  # it. TransactionError::AccountNotFound is the canonical "this account has no
+  # balance on the chain being simulated against": top-level, unwrapped, and with
+  # no business-logic reading. It classified `unrelated` until review found it.
+  def test_account_not_found_is_a_wrong_network_signal
+    got = run_js(DEVNET_QA, <<~JS)
+      return ["Attempt to debit an account but found no record of a prior credit.",
+              "AccountNotFound"].map(function(m) { return SolanaStudio.network.classify(m); });
+    JS
+
+    assert_equal %w[likely likely], got
+  end
+
+  # …and the deliberate NON-membership beside it, so the line between them is
+  # asserted rather than implied. An Anchor account error is genuinely ambiguous —
+  # wrong network, OR a right-network account nobody initialized — and turf-monster's
+  # own ErrorInterpreter already reads that case as admin-actionable. Under-claiming
+  # here is the design, not a gap.
+  def test_anchor_account_errors_stay_unrelated_because_they_are_ambiguous
+    got = run_js(DEVNET_QA, <<~JS)
+      return ["Transaction simulation failed: Error processing Instruction 0: custom program error: 0xbc4",
+              "AnchorError caused by account: contest. Error Code: AccountNotInitialized. Error Number: 3012."]
+        .map(function(m) { return SolanaStudio.network.classify(m); });
+    JS
+
+    assert_equal %w[unrelated unrelated], got
   end
 
   def test_explain_returns_null_for_an_unrelated_error

@@ -130,11 +130,37 @@
   // confidence. That sends a user to change their wallet's network over a full
   // contest: the exact wrong-thing-to-fix this feature exists to prevent, with the
   // feature's own voice behind it. Found in review by executing this file.
+  // Every entry here must name a PROGRAM CODE — proof the program ran and chose
+  // this outcome. "Error processing Instruction 0:" is deliberately NOT here: it
+  // is Solana's generic InstructionError envelope, and it wraps the not-found
+  // failures below just as readily as it wraps a business rejection. Putting it
+  // here fixed the first inversion by creating its mirror image: a wrapper at this
+  // precedence answered `unrelated` for
+  //
+  //   "Transaction simulation failed: Error processing Instruction 0:
+  //    Attempt to load a program that does not exist"
+  //
+  // so explain() returned null and the modal never opened. Precedence, verified
+  // against solana-sdk's transaction-error source: ProgramAccountNotFound,
+  // AccountNotFound and BlockhashNotFound all render TOP-LEVEL — only
+  // InstructionError carries the "Error processing Instruction {i}:" wrapper. So
+  // the composed string above is DEFENSIVE rather than observed; our own captured
+  // corpus has never wrapped a not-found. It costs nothing to order correctly and
+  // the rule generalizes: a wrapper must never decide confidence. That was the
+  // lesson of the first fix, and this list is where it has to hold.
   var PROGRAM_ERROR = [
     /custom program error/i,
-    /error processing instruction/i,
     /\b0x1[0-9a-f]{3}\b/i,          // Anchor's 6000+ user error range, as hex
     /\bAnchorError\b/i
+  ];
+
+  // The generic instruction envelope, checked AFTER the not-found signals. On its
+  // own — no program code, and nothing above matched — an instruction failed on
+  // its own terms and there is no wrong-chain signal to explain it, so it demotes
+  // an otherwise-POSSIBLE shrug to `unrelated` rather than deciding anything.
+  var INSTRUCTION_ERROR = [
+    /error processing instruction/i,
+    /\bInstructionError\b/i
   ];
 
   // LIKELY — the wallet looked for our program or our blockhash on a chain that
@@ -145,7 +171,15 @@
     /program that does not exist/i,
     /ProgramAccountNotFound/i,
     /unlikely to succeed/i,
-    /blockhash not found/i
+    /blockhash not found/i,
+    // TransactionError::AccountNotFound. The canonical "this account has no
+    // balance on the chain being simulated against" — top-level, unwrapped, and
+    // with no business-logic reading, which is what earns it a place here when
+    // the Anchor account errors deliberately do not get one (an
+    // AccountNotInitialized on a PDA is genuinely ambiguous: wrong network, or a
+    // right-network account nobody initialized).
+    /found no record of a prior credit/i,
+    /\bAccountNotFound\b/i
   ];
 
   // POSSIBLE — genuinely ambiguous. Phantom collapses a failed simulation into
@@ -186,6 +220,10 @@
     }
     for (i = 0; i < LIKELY.length; i++) {
       if (LIKELY[i].test(msg)) return "likely";
+    }
+    // AFTER the not-found signals, never before: the envelope wraps them too.
+    for (i = 0; i < INSTRUCTION_ERROR.length; i++) {
+      if (INSTRUCTION_ERROR[i].test(msg)) return "unrelated";
     }
     for (i = 0; i < POSSIBLE.length; i++) {
       if (POSSIBLE[i].test(msg)) return "possible";
