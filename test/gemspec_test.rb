@@ -60,32 +60,45 @@ class GemspecTest < Minitest::Test
     assert_empty dirs, "spec.files must list files, not directories"
   end
 
-  def test_gemspec_declares_exactly_one_version_literal
-    # The release conductor ALLOCATES the version — a PR that sets one either
-    # re-claims a published version or collides with a sibling PR, and
-    # bin/dor-check refuses the diff. The conductor rewrites this file with
-    # Release::GemVersion.rewrite_version, which refuses to touch a gemspec
-    # declaring more than one version literal rather than guess which is real.
-    #
-    # So the invariant worth testing is not "the version is X" — it is that the
-    # conductor can still find exactly one thing to rewrite. A second literal
-    # (a spec.metadata["version"], a commented-out old line) would strand the
-    # release with a fix-this-by-hand instruction.
-    literals = File.read(File.join(ROOT, "solana-studio.gemspec"))
-                   .scan(/^\s*spec\.version\s*=/)
+  def test_the_version_file_declares_exactly_one_literal
+    # config/release_repos.yml registers lib/solana_studio/version.rb as this
+    # gem's version_file, and the conductor rewrites it with
+    # Release::GemVersion.rewrite_version — which REFUSES a file declaring more
+    # than one literal rather than guess which is real. A second one (a
+    # commented-out old line, a MINIMUM_VERSION) strands the release with a
+    # fix-this-by-hand instruction.
+    literals = File.read(File.join(ROOT, "lib/solana_studio/version.rb"))
+                   .scan(/^\s*VERSION\s*=/)
 
     assert_equal 1, literals.length,
-                 "the gemspec must declare exactly one version literal for the release conductor to rewrite"
+                 "the version file must declare exactly one literal for the release conductor to rewrite"
   end
 
-  # NOTE — SolanaStudio::VERSION is deliberately NOT asserted against the
-  # gemspec. The conductor rewrites only the registered version_file
-  # (solana-studio.gemspec) plus Gemfile.lock, so the constant drifts one
-  # release behind by design. A test coupling them would go red DURING a
-  # release, which is the worst possible moment to learn about a duplication
-  # that predates this change. Collapsing the two onto one source
-  # (lib/solana_studio/version.rb, as studio-engine does) is a follow-up that
-  # has to move the registry entry in config/release_repos.yml with it.
+  def test_the_gemspec_holds_no_version_literal_of_its_own
+    # The reason the split exists. bin/dor-check refuses a PR that edits the
+    # registered version_file, matching on PATH — so while the gemspec WAS the
+    # version file, no PR could touch spec.files, the dependencies or the
+    # metadata either, none of which the conductor writes and none of which had
+    # another writer. A literal creeping back here would re-lock the manifest
+    # AND give the conductor two files claiming the version.
+    gemspec_src = File.read(File.join(ROOT, "solana-studio.gemspec"))
+
+    refute_match(/spec\.version\s*=\s*["']/, gemspec_src,
+                 "the gemspec must READ the version, never declare it")
+    assert_match(/spec\.version\s*=\s*SolanaStudio::VERSION/, gemspec_src)
+  end
+
+  def test_the_gemspec_and_the_constant_cannot_disagree
+    # Now that there is ONE source, this is a real invariant rather than the
+    # trap it would have been while they were two independent literals.
+    assert_equal SolanaStudio::VERSION, spec.version.to_s
+  end
+
+  def test_the_version_file_is_packaged
+    # It is required by lib/solana_studio.rb at load time. Outside the manifest,
+    # every consumer raises LoadError on require.
+    assert_includes spec.files, "lib/solana_studio/version.rb"
+  end
 
   def test_gem_declares_no_rails_runtime_dependency
     # The Rails-free contract, asserted rather than trusted: railties is a

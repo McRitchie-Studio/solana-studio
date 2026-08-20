@@ -1,6 +1,13 @@
+# The version is NOT written here. It lives in lib/solana_studio/version.rb —
+# the file config/release_repos.yml registers as this gem's `version_file` and
+# the release conductor rewrites during a sweep. Keeping it out of the gemspec
+# is what lets a PR edit the manifest below (spec.files, dependencies, metadata)
+# without tripping bin/dor-check's release-owned-file refusal.
+require_relative "lib/solana_studio/version"
+
 Gem::Specification.new do |spec|
   spec.name          = "solana-studio"
-  spec.version       = "0.4.7"
+  spec.version       = SolanaStudio::VERSION
   spec.authors       = ["Alex McRitchie"]
   spec.email         = ["solana-studio@mcritchie.studio"]
 
