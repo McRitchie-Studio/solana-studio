@@ -60,11 +60,32 @@ class GemspecTest < Minitest::Test
     assert_empty dirs, "spec.files must list files, not directories"
   end
 
-  def test_version_matches_the_library_constant
-    # A gemspec version that outruns SolanaStudio::VERSION publishes a gem whose
-    # own constant lies about which version it is.
-    assert_equal SolanaStudio::VERSION, spec.version.to_s
+  def test_gemspec_declares_exactly_one_version_literal
+    # The release conductor ALLOCATES the version — a PR that sets one either
+    # re-claims a published version or collides with a sibling PR, and
+    # bin/dor-check refuses the diff. The conductor rewrites this file with
+    # Release::GemVersion.rewrite_version, which refuses to touch a gemspec
+    # declaring more than one version literal rather than guess which is real.
+    #
+    # So the invariant worth testing is not "the version is X" — it is that the
+    # conductor can still find exactly one thing to rewrite. A second literal
+    # (a spec.metadata["version"], a commented-out old line) would strand the
+    # release with a fix-this-by-hand instruction.
+    literals = File.read(File.join(ROOT, "solana-studio.gemspec"))
+                   .scan(/^\s*spec\.version\s*=/)
+
+    assert_equal 1, literals.length,
+                 "the gemspec must declare exactly one version literal for the release conductor to rewrite"
   end
+
+  # NOTE — SolanaStudio::VERSION is deliberately NOT asserted against the
+  # gemspec. The conductor rewrites only the registered version_file
+  # (solana-studio.gemspec) plus Gemfile.lock, so the constant drifts one
+  # release behind by design. A test coupling them would go red DURING a
+  # release, which is the worst possible moment to learn about a duplication
+  # that predates this change. Collapsing the two onto one source
+  # (lib/solana_studio/version.rb, as studio-engine does) is a follow-up that
+  # has to move the registry entry in config/release_repos.yml with it.
 
   def test_gem_declares_no_rails_runtime_dependency
     # The Rails-free contract, asserted rather than trusted: railties is a

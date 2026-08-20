@@ -2,9 +2,10 @@
 
 The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v0.5.0 (2026-08-20)
+## Unreleased — targets v0.5.0 (minor)
 
-Ships the gem's first Rails half, and its first CI.
+Ships the gem's first Rails half, and its first CI. The version number is
+allocated by the release conductor, not by this entry.
 
 ### Added
 - **`Solana::Network`** — cluster identity, Rails-free and RPC-free. Pinned genesis hashes for mainnet-beta/devnet/testnet, `cluster_for_genesis` (what an RPC URL *actually* points at, as opposed to what its hostname claims), Wallet Standard chain ids, alias normalization, and `expected_for_environment`. `alignment(cluster:, genesis_hash:)` returns **three** states — `:aligned`, `:mismatched`, `:unverifiable` — because localnet has no pinnable genesis and an unknown cluster name has no hash to compare: collapsing `:unverifiable` into `:mismatched` refuses to boot every local validator, and collapsing it into `:aligned` trusts a chain nobody checked.

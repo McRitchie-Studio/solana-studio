@@ -9,7 +9,7 @@ require_relative "solana/auth_verifier"
 require_relative "solana/network"
 
 module SolanaStudio
-  VERSION = "0.5.0"
+  VERSION = "0.4.7"
 end
 
 # The Rails half of the gem — views, assets, and the browser network guard.

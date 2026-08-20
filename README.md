@@ -8,7 +8,7 @@ Ruby primitives for building on Solana — JSON-RPC client, Ed25519 keypairs, Bo
 
 ```ruby
 # Gemfile
-gem "solana-studio", "~> 0.5.0"
+gem "solana-studio", "~> 0.5"
 ```
 
 Consumer apps use the RubyGems release. Use a local path only while actively developing the gem, and restore the RubyGems dependency before merging.
