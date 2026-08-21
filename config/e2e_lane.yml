@@ -5,7 +5,7 @@
 #   · bin/e2e-executed-set-check         THE RUNTIME GATE. Reads Playwright's OWN
 #                                        report after the lane runs and asserts the
 #                                        set it EXECUTED matches this contract.
-#   · test/lib/e2e_lane_contract_test.rb THE STATIC GUARD. Reads the committed specs
+#   · test/e2e_lane_contract_test.rb THE STATIC GUARD. Reads the committed specs
 #                                        and asserts they DECLARE this contract.
 #
 # WHY THE RUNTIME HALF EXISTS. Static counting answers "how many specs are
@@ -26,6 +26,11 @@
 #
 # A `--list` run writes a receipt too, and it reports every spec as SKIPPED — so
 # the gate refuses one rather than reading it as a catastrophic failure.
+#
+# A receipt can also be UNREADABLE rather than wrong — a run killed mid-write (a
+# cancelled job, an OOM) leaves a truncated file. The gate NAMES that case rather
+# than dying on the parse, because "the lane never finished" and "the gate is
+# broken" are different findings that otherwise look identical at the console.
 #
 # TO CHANGE THESE NUMBERS you must edit this file, which is a visible, reviewable
 # diff line with a comment attached. That is the point: the hole cannot grow

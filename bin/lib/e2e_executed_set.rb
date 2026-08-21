@@ -12,7 +12,32 @@ require "yaml"
 module E2eExecutedSet
   Result = Struct.new(:ok, :failures, :summary, keyword_init: true)
 
+  # A receipt can be UNREADABLE as well as wrong, and that is a DIFFERENT
+  # finding: a run killed mid-write — a cancelled job, an OOM, a full disk —
+  # leaves a truncated file behind. Letting JSON::ParserError escape still exits
+  # non-zero, so the gate does fail closed either way; but it fails closed
+  # printing a stack trace that reads like a bug in the gate rather than the
+  # thing that actually happened, which is a lane that never finished.
+  CorruptReceipt = Class.new(StandardError)
+
   module_function
+
+  # The receipt's bytes turned into a report, or a plain statement of why they
+  # are not one. Kept here rather than in the CLI so this mode is unit tested at
+  # the same tier as the arithmetic it guards.
+  def parse_report(text, path)
+    report = JSON.parse(text)
+    unless report.is_a?(Hash) && report["stats"].is_a?(Hash)
+      raise CorruptReceipt, "the receipt at #{path} parsed but carries no `stats` block — a Playwright " \
+                            "JSON report always has one. Is the gate pointed at the wrong file?"
+    end
+
+    report
+  rescue JSON::ParserError => e
+    raise CorruptReceipt, "the receipt at #{path} is not valid JSON (#{e.message.lines.first.to_s.strip}). " \
+                          "A run killed mid-write leaves a truncated report — read it as a lane that did " \
+                          "not finish, never as one that had nothing to report."
+  end
 
   # Every spec in the report, flattened out of Playwright's nested suites.
   def specs(report)

@@ -67,6 +67,35 @@ class E2eExecutedSetTest < Minitest::Test
     assert_includes result.failures.join(" "), "`--list`"
   end
 
+  # UNREADABLE IS NOT THE SAME FINDING AS WRONG. A run killed mid-write leaves a
+  # truncated file; without this the gate still exits non-zero, but by way of an
+  # uncaught JSON::ParserError, which reads like a bug in the gate rather than a
+  # lane that never finished. Same verdict, and only one of them is actionable.
+  def test_a_truncated_receipt_is_named_rather_than_crashing
+    error = assert_raises(E2eExecutedSet::CorruptReceipt) do
+      E2eExecutedSet.parse_report('{"stats":{"expec', "tmp/e2e-report.json")
+    end
+
+    assert_includes error.message, "not valid JSON"
+    assert_includes error.message, "did not finish"
+  end
+
+  # Pointing the gate at a file that is valid JSON but is not a Playwright report
+  # would otherwise read as "executed 0" — a coverage failure, when the real
+  # mistake is the path.
+  def test_valid_json_that_is_not_a_playwright_report_is_named
+    error = assert_raises(E2eExecutedSet::CorruptReceipt) do
+      E2eExecutedSet.parse_report('{"ok":true}', "tmp/wrong.json")
+    end
+
+    assert_includes error.message, "no `stats` block"
+  end
+
+  def test_a_real_receipt_parses
+    assert_equal 7, E2eExecutedSet.parse_report(JSON.dump(report(expected: 7)), "tmp/e2e-report.json")
+                                  .dig("stats", "expected")
+  end
+
   def test_specs_are_flattened_out_of_nested_suites
     nested = {
       "stats" => { "expected" => 1, "skipped" => 0, "unexpected" => 0 },

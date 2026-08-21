@@ -83,6 +83,16 @@ class E2eLaneContractTest < Minitest::Test
     refute_match(/^\s*grep\b/, config, "a grep in the config silently shrinks the lane")
     refute_match(/onlyChanged|only-changed/, config, "--only-changed makes the executed set depend on the diff")
     refute_match(/^\s*retries:\s*[1-9]/, config, "a retry hides the intermittency this lane exists to surface")
+
+    # THE AXES THAT SURVIVE EVERY COUNT ABOVE. grepInvert, testIgnore, testMatch
+    # and shard each remove specs from the RUN while leaving the committed tree —
+    # which is what every other assertion in this file reads — perfectly intact.
+    # The glob e2e/*.spec.js is this lane's ONE declaration of its set; a second
+    # place to declare it is a second place for the two to disagree.
+    refute_match(/grepInvert|grep-invert/, config, "grepInvert removes specs every count here still declares")
+    refute_match(/^\s*testIgnore\b/, config, "testIgnore drops a file the committed tree still contains")
+    refute_match(/^\s*testMatch\b/, config, "testMatch re-declares the set; e2e/*.spec.js already does")
+    refute_match(/^\s*shard\b/, config, "a shard runs a FRACTION of the set and still reports green")
   end
 
   # THE LAB INVARIANT. A lab page may set up a partial's locals and nothing else.

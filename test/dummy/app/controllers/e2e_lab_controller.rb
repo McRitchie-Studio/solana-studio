@@ -9,7 +9,7 @@
 # solana_studio/modals/_network_mismatch, or restating the classifier in the page
 # instead of loading the shipped .js — the specs start grading the LAB, and the
 # lane reports green over gem code no browser ever touched. That failure is
-# invisible: every spec still passes. test/lib/e2e_lane_contract_test.rb asserts
+# invisible: every spec still passes. test/e2e_lane_contract_test.rb asserts
 # the pages render by name and carry no logic of their own.
 #
 # ASSET DELIVERY is the HOST's job, and a gem has no asset pipeline — so the dummy

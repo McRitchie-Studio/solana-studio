@@ -32,7 +32,14 @@ unless File.exist?(report_path)
   exit 1
 end
 
-report = JSON.parse(File.read(report_path))
+begin
+  report = E2eExecutedSet.parse_report(File.read(report_path), report_path)
+rescue E2eExecutedSet::CorruptReceipt => e
+  puts "e2e-executed-set-check: UNREADABLE RECEIPT"
+  puts "  ✗ #{e.message}"
+  exit 1
+end
+
 contract = YAML.safe_load_file(contract_path) || {}
 result = E2eExecutedSet.check(report, contract)
 
