@@ -1,0 +1,36 @@
+# THE BROWSER LANE'S CONTRACT — what the green `playwright` check actually covers.
+#
+# ONE file, read by BOTH halves of the guard, so there is exactly ONE number to move:
+#
+#   · bin/e2e-executed-set-check         THE RUNTIME GATE. Reads Playwright's OWN
+#                                        report after the lane runs and asserts the
+#                                        set it EXECUTED matches this contract.
+#   · test/lib/e2e_lane_contract_test.rb THE STATIC GUARD. Reads the committed specs
+#                                        and asserts they DECLARE this contract.
+#
+# WHY THE RUNTIME HALF EXISTS. Static counting answers "how many specs are
+# DECLARED". It cannot answer "how many RAN" — different questions, and the gap
+# between them is where every escape hatch lives. A runtime skip is invisible to a
+# source reader BY CONSTRUCTION:
+#
+#     test("the modal opens", async ({ page }, testInfo) => {
+#       testInfo.skip();          // exit 0, "1 skipped", every static guard green
+#
+# and so is a `--grep` added to the CI command, and so is `--only-changed`, and so
+# is a spec whose file never got collected. Each is a different SPELLING of the same
+# event: a spec left the executed set. Enumerating spellings is how the hub's
+# version of this guard was defeated three times. The gate reads the RECEIPT, where
+# all of them surface as the same arithmetic failure:
+#
+#     expected == total_specs  AND  skipped == 0  AND  unexpected == 0
+#
+# A `--list` run writes a receipt too, and it reports every spec as SKIPPED — so
+# the gate refuses one rather than reading it as a catastrophic failure.
+#
+# TO CHANGE THESE NUMBERS you must edit this file, which is a visible, reviewable
+# diff line with a comment attached. That is the point: the hole cannot grow
+# silently. DERIVE them, never count by hand: `npx playwright test --list`.
+total_specs: 7
+files:
+  e2e/network_guard.spec.js: 4
+  e2e/network_mismatch_modal.spec.js: 3

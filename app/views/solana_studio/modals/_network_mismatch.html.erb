@@ -17,12 +17,22 @@
   honest modal states what the app knows — its own network — and leaves the
   comparison to the person who can actually see the wallet.
 
-  Host requirements: studio-engine's modal host (Alpine $store.modals) and the
-  shared modal blocks. Register it like any other modal:
+  HOST REQUIREMENTS — both are load-bearing, and the second is easy to miss:
+    1. studio-engine's modal host (Alpine $store.modals) and the shared modal
+       blocks, with this partial registered under the id "network-mismatch"
+       inside a template x-if on that id.
+    2. AN ANCESTOR x-data SCOPE, normally a bare `x-data` on the host app's
+       <body>. The engine's modal host roots itself at a template x-if with no
+       x-data of its own, and Alpine only walks trees beneath an x-data root —
+       without it the host is never processed, the modal never opens, and the
+       page looks perfectly correct in the served HTML.
 
-    <template x-if="$store.modals.current().id === 'network-mismatch'">
-      <%%= render "solana_studio/modals/network_mismatch" %>
-    </template>
+  NO ERB TAGS IN THIS COMMENT, deliberately. An earlier version spelled the
+  registration example out in real tags; the example's own closing marker ended
+  this comment early and the remaining prose leaked into the rendered card as
+  literal text. It compiled, it passed every Ruby tier, and only the browser lane
+  saw it. Describe the integration in words here; the runnable example lives in
+  the gem README, where a stray marker cannot escape into a page.
 %>
 <div x-data="{
        get props() { var c = $store.modals.current(); return (c && c.props) || {}; }

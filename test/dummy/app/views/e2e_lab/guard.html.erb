@@ -1,0 +1,32 @@
+<%# Drives the SHIPPED guard in a real browser.
+
+    The page carries no classifier logic — it exposes a single hook the spec
+    calls, and everything it reports comes from window.SolanaStudio.network,
+    which is the file under test. Node stubs already cover the classifier's
+    string matching; what THIS page can see and they cannot is whether the script
+    parses and runs at all in a browser, and whether the promise wrapper behaves
+    when a real rejection travels through it. %>
+<main data-test="guard-lab">
+  <p data-test="guard-loaded"><%= "" %></p>
+  <pre data-test="result"></pre>
+</main>
+
+<script>
+  // Presence, not behavior: proves the shipped file executed. An ERB comment
+  // that terminated early, a syntax error, a missing asset — each leaves this
+  // empty, and each is invisible to every non-browser tier.
+  document.querySelector('[data-test="guard-loaded"]').textContent =
+    (window.SolanaStudio && window.SolanaStudio.network) ? "loaded" : "MISSING";
+
+  // The spec's single entry point. It returns whatever the real guard returns.
+  window.labRun = function(payload) {
+    var out = document.querySelector('[data-test="result"]');
+    return window.SolanaStudio.network.guard(
+      function() { return Promise.reject(new Error(payload)); },
+      { action: "Entering this contest", onHint: function(hint) { out.dataset.hint = JSON.stringify(hint); } }
+    ).catch(function(err) {
+      out.dataset.rethrown = err.message;
+      return err.message;
+    });
+  };
+</script>
