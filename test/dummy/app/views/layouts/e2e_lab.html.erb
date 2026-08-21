@@ -1,0 +1,32 @@
+<%# The lab layout.
+
+    It publishes the SAME data attribute a host publishes — data-solana-network,
+    carrying Solana::Network.describe — because that is the contract the shipped
+    guard reads. A hand-set attribute with different keys would let the specs pass
+    over a guard that could never read a real host's page.
+
+    Alpine and the guard both arrive by <script src>, pointing at the real files
+    e2e/boot.rb copied into public/e2e. Alpine is DEFERRED so the modal host's
+    store registration (which runs inline, in the host partial) lands first —
+    the host's own comment explains why that order is load-bearing. %>
+<!DOCTYPE html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>solana-studio e2e lab</title>
+    <script src="/e2e/js/solana_studio/network_guard.js"></script>
+  </head>
+  <%# `x-data` ON THE BODY is a HOST responsibility, not decoration.
+      studio-engine's modal host roots itself at a bare
+      <template x-if="$store.modals.current()"> with no x-data of its own, and
+      Alpine v3 only walks trees beneath an x-data root — so without this the
+      host's template is never processed, the modal never opens, and the page
+      looks perfectly fine in curl. turf-monster's layout carries the same bare
+      `x-data` on <body> for the same reason. The lab is the host here, so the
+      lab supplies it. %>
+  <body x-data class="bg-page text-body" data-solana-network="<%= @network_json %>">
+    <%= yield %>
+    <script defer src="/e2e/js/studio/alpine.js"></script>
+  </body>
+</html>

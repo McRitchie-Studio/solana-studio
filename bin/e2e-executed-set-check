@@ -1,0 +1,53 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# bin/e2e-executed-set-check — THE BROWSER LANE'S VERDICT GATE.
+#
+# The `playwright` job can tell you its specs PASSED. It cannot tell you it RAN
+# THEM ALL — the one question a test lane structurally cannot answer about itself.
+# So this runs AFTER the lane, over the JSON report it emitted, and asserts the
+# executed set against config/e2e_lane.yml.
+#
+#   Usage: bin/e2e-executed-set-check [report.json] [--contract config/e2e_lane.yml]
+#
+# Exit 0 = the lane executed exactly the specs it is supposed to.
+# Exit 1 = it did not, and the green lane was covering less than it claimed.
+require_relative "lib/e2e_executed_set"
+
+root = File.expand_path("..", __dir__)
+report_path = nil
+contract_path = File.join(root, "config", "e2e_lane.yml")
+
+args = ARGV.dup
+while (arg = args.shift)
+  case arg
+  when "--contract" then contract_path = args.shift
+  else report_path = arg
+  end
+end
+report_path ||= File.join(root, "tmp", "e2e-report.json")
+
+unless File.exist?(report_path)
+  warn "e2e-executed-set-check: no report at #{report_path} — did the lane run?"
+  exit 1
+end
+
+begin
+  report = E2eExecutedSet.parse_report(File.read(report_path), report_path)
+rescue E2eExecutedSet::CorruptReceipt => e
+  puts "e2e-executed-set-check: UNREADABLE RECEIPT"
+  puts "  ✗ #{e.message}"
+  exit 1
+end
+
+contract = YAML.safe_load_file(contract_path) || {}
+result = E2eExecutedSet.check(report, contract)
+
+puts "e2e-executed-set-check: #{result.summary}"
+if result.ok
+  puts "  ✓ the lane executed exactly the set config/e2e_lane.yml declares"
+  exit 0
+end
+
+result.failures.each { |f| puts "  ✗ #{f}" }
+exit 1

@@ -8,7 +8,7 @@ Ruby primitives for building on Solana — JSON-RPC client, Ed25519 keypairs, Bo
 
 ```ruby
 # Gemfile
-gem "solana-studio", "~> 0.4.7"
+gem "solana-studio", "~> 0.5"
 ```
 
 Consumer apps use the RubyGems release. Use a local path only while actively developing the gem, and restore the RubyGems dependency before merging.
@@ -79,14 +79,155 @@ pda, bump = Solana::Transaction.find_pda(
 )
 ```
 
+### Network (cluster identity)
+
+A Solana cluster has three names that must agree, and nothing in the protocol
+makes them agree for you: the operator's name (`devnet`), the chain's own
+fingerprint (its genesis hash), and the wallet's name (`solana:devnet`).
+`Solana::Network` is the lookup table that relates them.
+
+```ruby
+Solana::Network.genesis_hash("devnet")          # => "EtWTRABZaYq6..."
+Solana::Network.cluster_for_genesis(hash)       # => "mainnet-beta" (what an RPC ACTUALLY is)
+Solana::Network.wallet_standard_chain("mainnet-beta")  # => "solana:mainnet"  (note: no -beta)
+Solana::Network.canonical("mainnet")            # => "mainnet-beta"; nil if unrecognized
+Solana::Network.expected_for_environment("qa")  # => "devnet"
+```
+
+Alignment has **three** outcomes, and collapsing the middle one is a bug:
+
+```ruby
+Solana::Network.alignment(cluster: "devnet", genesis_hash: live_hash)
+# => :aligned | :mismatched | :unverifiable
+```
+
+`:unverifiable` means there was no pinned hash to compare — localnet (whose
+genesis is minted per boot) or an unrecognized cluster name. Treating it as
+`:mismatched` refuses to boot every local validator; treating it as `:aligned`
+trusts a chain nobody checked.
+
+## Rails engine (optional)
+
+The gem is Rails-free by default — `railties` is **not** a runtime dependency,
+and plain-Ruby consumers (scripts, rake tasks, `chain-ops`) never load a line of
+it. When the gem is required inside a Rails process, `SolanaStudio::Engine`
+defines itself and contributes the onchain UI primitives.
+
+### Network mismatch guard
+
+The problem: a user whose wallet is set to Mainnet, using a QA app that runs on
+Devnet. Their wallet simulates against the wrong chain, shows a frightening
+approval sheet and a balance from a chain nobody is using, and they abandon the
+flow.
+
+**A website cannot detect this directly.** Phantom does not expose its selected
+network, and the Wallet Standard `chains` array lists what a wallet *supports*,
+not what it has *selected*. There is no pre-flight read to write. So the guard
+does the only two things that work:
+
+**1. Assert at sign-in.** Hand the wallet a SIWS `chainId` and let it contradict
+you — the one pre-emptive signal that exists.
+
+```js
+var signInInput = SolanaStudio.network.withSignInChainId({
+  domain: window.location.host,
+  nonce: nonce
+});
+// => adds chainId: "solana:devnet"
+```
+
+**2. Explain after a failure.** Wrap any onchain action. The guard never blocks
+and never swallows an error — it re-throws the original rejection untouched, and
+hands you a hint only when a mismatch would actually explain the failure.
+
+```js
+SolanaStudio.network.guard(
+  function() { return provider.signTransaction(tx); },
+  {
+    action: "Entering this contest",
+    onHint: function(hint) { Alpine.store('modals').open('network-mismatch', hint); }
+  }
+).then(broadcast);   // your existing .catch still receives the real error
+```
+
+`classify(err)` returns `"likely"`, `"possible"`, or `"unrelated"`, and is
+calibrated to **under-claim**: an insufficient-funds error stays an
+insufficient-funds error. Dressing up an unrelated failure as a network problem
+sends the user to fix the wrong thing, which is the bug this feature exists to
+remove.
+
+### Host setup
+
+```erb
+<%# once, inside your modal host %>
+<template x-if="$store.modals.current().id === 'network-mismatch'">
+  <%= render "solana_studio/modals/network_mismatch" %>
+</template>
+```
+
+```erb
+<%# so the browser can read what the server knows %>
+<body data-solana-network="<%= Solana::Network.describe(
+        Solana::Config::NETWORK, environment: Rails.env).to_json %>">
+```
+
+The guard falls back to discrete `data-solana-cluster` / `data-app-environment`
+attributes, so a host can adopt it before changing its layout.
+
+Requires studio-engine's modal host (`Alpine.store('modals')`) and its shared
+modal blocks. The JS is `solana_studio/network_guard.js` on the asset path.
+
 ## Dependencies
 
 - `ed25519` (~> 1.3) — Ed25519 signing
 - Ruby stdlib only (net/http, json, digest, securerandom)
+- **No Rails dependency.** `railties` is a development dependency only; the
+  engine loads solely when the host has already loaded Rails.
 
 ## Development Notes
 
 See [RUNBOOK.md](./RUNBOOK.md) for troubleshooting and local test commands.
+
+### The browser lane
+
+The Ruby suite cannot see two things this gem ships: whether
+`network_guard.js` actually **runs** in a browser, and whether
+`_network_mismatch.html.erb` **renders** (rendering it needs studio-engine's modal
+blocks and a view context, so `test/views_test.rb` only proves it compiles).
+
+```bash
+npm ci && npx playwright install chromium
+npx playwright test              # ~40s, boots its own server
+npx playwright test --headed     # watch it
+bin/e2e-executed-set-check       # did the lane run its WHOLE declared set?
+```
+
+The lane drives the **shipped bytes**: `e2e/boot.rb` copies the real
+`app/assets/javascripts/solana_studio/network_guard.js` into the dummy's `public/`,
+and the lab pages render the real partials by name. A lab page may set up a
+partial's locals and nothing else — `test/e2e_lane_contract_test.rb` asserts that,
+because a page that hand-rolled what the gem does would leave the specs grading the
+lab while reporting green over untested gem code.
+
+It is **not** in `bin/release-check`. It runs as a parallel CI job, so it adds ~0
+to the wall time a PR waits and a release does not install a browser to publish.
+
+**Two halves, one number.** `config/e2e_lane.yml` declares how many specs must
+execute. `bin/e2e-executed-set-check` reads Playwright's own receipt after the run
+and asserts the executed set against it; `test/e2e_lane_contract_test.rb` asserts
+the committed specs still declare it. Static counting answers "how many are
+DECLARED" and can never answer "how many RAN" — and a runtime skip, a stray
+`--grep`, `--only-changed`, and an uncollected file are four spellings of the same
+event. The receipt turns all four into one arithmetic failure.
+
+Derive the counts, never hand-count them: `npx playwright test --list`.
+
+Run the suite with `bin/release-check` — the same entry point CI and the release
+gate use, so they cannot drift apart. It enumerates test files by glob (no list
+to forget a file from) and **fails a file that runs zero tests or skips one**,
+because a suite that quietly stops covering something is the failure a green
+build cannot show you. `node` is required: the browser guard's suite runs the
+shipped `.js` under node with `window`/`document` stubs.
 
 ## License
 

@@ -1,0 +1,83 @@
+<%#
+  Network-mismatch explainer — the onchain modal primitive from solana-studio.
+
+  Opened when a wallet action fails in a way a cluster mismatch would explain.
+  Props come from SolanaStudio.network.explain(err) (see
+  app/assets/javascripts/solana_studio/network_guard.js) and carry:
+
+    confidence       "likely" | "possible" — how much a mismatch accounts for it
+    networkLabel     the cluster THIS APP runs on ("Devnet")
+    environmentLabel the environment the user is in ("QA")
+    action           what they were doing ("Entering this contest")
+    originalMessage  the wallet's own error text — always shown, never replaced
+
+  This modal EXPLAINS; it does not block. A website cannot read which network a
+  wallet is set to (Phantom does not expose it, and the Wallet Standard `chains`
+  array lists what a wallet supports rather than what it selected), so an
+  honest modal states what the app knows — its own network — and leaves the
+  comparison to the person who can actually see the wallet.
+
+  HOST REQUIREMENTS — both are load-bearing, and the second is easy to miss:
+    1. studio-engine's modal host (Alpine $store.modals) and the shared modal
+       blocks, with this partial registered under the id "network-mismatch"
+       inside a template x-if on that id.
+    2. AN ANCESTOR x-data SCOPE, normally a bare `x-data` on the host app's
+       <body>. The engine's modal host roots itself at a template x-if with no
+       x-data of its own, and Alpine only walks trees beneath an x-data root —
+       without it the host is never processed, the modal never opens, and the
+       page looks perfectly correct in the served HTML.
+
+  NO ERB TAGS IN THIS COMMENT, deliberately. An earlier version spelled the
+  registration example out in real tags; the example's own closing marker ended
+  this comment early and the remaining prose leaked into the rendered card as
+  literal text. It compiled, it passed every Ruby tier, and only the browser lane
+  saw it. Describe the integration in words here; the runnable example lives in
+  the gem README, where a stray marker cannot escape into a page.
+%>
+<div x-data="{
+       get props() { var c = $store.modals.current(); return (c && c.props) || {}; }
+     }">
+  <%= render 'studio/modals/blocks/card_header',
+        icon_emoji: '🔀',
+        title_key: "props.title || 'Check your wallet\\'s network'" do %>
+    <span x-text="props.message"></span>
+  <% end %>
+
+  <%# The app's own facts. Stated plainly and without hedging, because these two
+      rows are the half of the comparison we can actually vouch for. %>
+  <div class="rounded-lg border border-subtle bg-surface-alt p-3 mb-4 text-sm">
+    <div class="flex items-center justify-between gap-3">
+      <span class="text-secondary">This app runs on</span>
+      <span class="font-semibold text-heading" x-text="props.networkLabel"></span>
+    </div>
+    <div class="flex items-center justify-between gap-3 mt-2">
+      <span class="text-secondary">Environment</span>
+      <span class="font-semibold text-heading" x-text="props.environmentLabel"></span>
+    </div>
+  </div>
+
+  <div class="rounded-lg border border-subtle p-3 mb-4">
+    <p class="text-xs font-semibold text-heading mb-2">If your wallet is on a different network</p>
+    <p class="text-xs text-secondary">
+      Open Phantom, then <span class="font-semibold text-heading">Settings → Developer Settings</span>
+      and switch the network to <span class="font-semibold text-heading" x-text="props.networkLabel"></span>.
+      Your wallet shows a separate balance for every network, so a wallet on the
+      wrong one looks empty even when it isn't.
+    </p>
+  </div>
+
+  <%# The wallet's real error, always. The hint sits BESIDE the error, never in
+      place of it — a mismatch is inferred from error text, and a wrong guess
+      that swallowed the true message would be a worse bug than the confusion
+      this modal exists to clear up. %>
+  <template x-if="props.originalMessage">
+    <details class="mb-4 rounded-lg border border-subtle bg-surface-alt p-3">
+      <summary class="text-xs text-secondary cursor-pointer">What the wallet reported</summary>
+      <p class="mt-2 text-xs text-secondary break-words" x-text="props.originalMessage"></p>
+    </details>
+  </template>
+
+  <button type="button" class="btn btn-primary btn-lg w-full" @click="$store.modals.close()">
+    Got it
+  </button>
+</div>

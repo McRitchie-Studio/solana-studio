@@ -6,7 +6,14 @@ require_relative "solana/spl_token"
 require_relative "solana/system_program"
 require_relative "solana/nonce_account"
 require_relative "solana/auth_verifier"
+require_relative "solana/network"
 
-module SolanaStudio
-  VERSION = "0.4.7"
-end
+# The version is its own file so the release conductor has exactly one literal
+# to rewrite, and so editing this gem's MANIFEST does not read as editing its
+# version. See lib/solana_studio/version.rb.
+require_relative "solana_studio/version"
+
+# The Rails half of the gem — views, assets, and the browser network guard.
+# Loaded only inside a Rails process; a plain-Ruby consumer never sees it and
+# never needs railties installed. See lib/solana_studio/engine.rb.
+require_relative "solana_studio/engine" if defined?(::Rails::Engine)

@@ -1,0 +1,132 @@
+# solana-studio CI — the gem's own suite.
+#
+# This lane did not exist before v0.5.0, and its absence was DECLARED rather
+# than overlooked (mcritchie-studio/lib/gem_ci_workflows.rb recorded
+# "solana-studio => nil # ships no suite workflow"). That was a defensible call
+# for a pure-Ruby gem of Borsh encoders whose consumers all ran their own suites
+# against it.
+#
+# 0.5.0 ends that. The gem now ships a Rails engine — an ERB partial and a
+# browser guard that a consumer app RENDERS. Two failure modes arrive with it
+# that no consumer suite catches in time:
+#
+#   · a view left outside spec.files publishes an engine with no views in it,
+#     green everywhere until a host raises "missing partial" at runtime;
+#   · the browser guard is JavaScript, which no Ruby consumer test executes.
+#
+# Both are covered by test/gemspec_test.rb and test/network_guard_js_test.rb,
+# and neither is worth anything unless something runs them before publish.
+#
+# node is REQUIRED, not optional: the guard suite runs the shipped .js under
+# node with window/document stubs, and it FAILS rather than skips when node is
+# missing. bin/release-check additionally rejects any file that runs zero tests
+# or skips one, so a lane that quietly stops covering something goes red.
+#
+# The suite runs through bin/release-check — the same entry point used for a
+# local cert and a gem release — so CI and the release gate cannot drift apart.
+
+name: Gem CI
+
+on:
+  pull_request:
+  push:
+    branches: [accepted, release, main]
+
+jobs:
+  gem-suite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Suite
+        run: bin/release-check
+
+      # A packaging error is this gem's highest-consequence, lowest-visibility
+      # failure, so the build is proven here rather than discovered at publish.
+      - name: Build the gem
+        run: gem build solana-studio.gemspec
+
+      # test/gemspec_test.rb asserts the MANIFEST; this asserts the ARTIFACT.
+      # They are different claims — a manifest can be right while the build
+      # excludes a file — and only the artifact is what a consumer installs.
+      - name: Assert the engine is inside the built gem
+        run: |
+          gem_file="$(ls solana-studio-*.gem | head -1)"
+          echo "Inspecting $gem_file"
+          contents="$(gem contents --gemspec "$gem_file" 2>/dev/null || tar -xOf "$gem_file" data.tar.gz | tar -tzf -)"
+          echo "$contents"
+          for required in \
+            app/views/solana_studio/modals/_network_mismatch.html.erb \
+            app/assets/javascripts/solana_studio/network_guard.js
+          do
+            echo "$contents" | grep -qF "$required" || {
+              echo "MISSING FROM BUILT GEM: $required"
+              echo "Widen spec.files in solana-studio.gemspec."
+              exit 1
+            }
+          done
+          echo "Engine files present in the built gem."
+
+  # ── THE BROWSER LANE ────────────────────────────────────────────────────────
+  #
+  # A PARALLEL job, not a step inside bin/release-check, and that is deliberate:
+  # it runs alongside the Ruby suite so it adds ~0 to the wall time a PR waits,
+  # and a gem release does not have to install a browser to publish.
+  #
+  # WHY IT EXISTS. This gem ships an imperative browser program and an ERB partial
+  # no Ruby tier can render. Standing this lane up caught, on its FIRST real run, a
+  # defect already merged and already past two reviewers, CI, and 114 tests: an ERB
+  # comment in the shipped modal terminated early and leaked `%>` into the rendered
+  # card. test/views_test.rb was green throughout — it proves the template COMPILES,
+  # and a template can compile perfectly while rendering wrong.
+  playwright:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install node deps
+        run: npm ci || npm install
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the browser lane
+        run: npx playwright test
+
+      # THE VERDICT GATE. The job above can say its specs PASSED; it cannot say it
+      # RAN THEM ALL. This reads Playwright's own receipt and asserts the executed
+      # set against config/e2e_lane.yml — where a runtime skip, a stray --grep, an
+      # uncollected file and --only-changed all surface as the same arithmetic
+      # failure instead of four different invisible ones.
+      #
+      # Runs in the SAME job, after the lane, because it needs the receipt the lane
+      # just wrote. `if: always()` so a failing lane is still audited for coverage
+      # rather than hiding a narrowed set behind a red spec.
+      - name: Assert the lane executed its whole declared set
+        if: always()
+        run: bin/e2e-executed-set-check
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-trace
+          path: test-results/
+          retention-days: 7
