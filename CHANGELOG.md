@@ -2,6 +2,29 @@
 
 The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased — targets v0.5.0 (minor)
+
+Ships the gem's first Rails half, and its first CI. The version number is
+allocated by the release conductor, not by this entry.
+
+### Added
+- **`Solana::Network`** — cluster identity, Rails-free and RPC-free. Pinned genesis hashes for mainnet-beta/devnet/testnet, `cluster_for_genesis` (what an RPC URL *actually* points at, as opposed to what its hostname claims), Wallet Standard chain ids, alias normalization, and `expected_for_environment`. `alignment(cluster:, genesis_hash:)` returns **three** states — `:aligned`, `:mismatched`, `:unverifiable` — because localnet has no pinnable genesis and an unknown cluster name has no hash to compare: collapsing `:unverifiable` into `:mismatched` refuses to boot every local validator, and collapsing it into `:aligned` trusts a chain nobody checked.
+- **`SolanaStudio::Engine`** — an **optional** Rails engine, required only when `Rails::Engine` is already defined. `railties` is deliberately NOT a runtime dependency: plain-Ruby consumers (chain-ops scripts, rake tasks, `ruby -e`) load the gem exactly as before and never install Rails. Both directions are asserted, in separate subprocesses, in `test/engine_test.rb`.
+- **`solana_studio/modals/_network_mismatch`** — the network-mismatch explainer modal, rendering through studio-engine's shared modal blocks.
+- **`solana_studio/network_guard.js`** — `SolanaStudio.network`, a validation wrapper for onchain actions. A website **cannot** read which network a wallet is set to (Phantom does not expose it; the Wallet Standard `chains` array lists what a wallet supports, not what it selected), so the guard does the only two things that work: `withSignInChainId` asserts the app's cluster as a SIWS `chainId` and lets the wallet contradict it, and `guard(fn, {onHint})` classifies a *failure* after the fact. It never blocks, and it re-throws the original rejection untouched — a hint beside the real error, never instead of it. `classify` is calibrated to under-claim, and precedence is what makes that true: a custom program error means the program RAN on a chain that has it, so it outranks the "Transaction simulation failed" wrapper that Solana puts around every failed simulation. Without that ordering an ordinary "contest is full" classified as a probable network problem at top confidence — the exact wrong-thing-to-fix this feature exists to prevent, in the feature's own voice.
+- **`bin/release-check`** — one entry point for local cert, CI, and release. Enumerates test files by glob (no curated list to drift) and fails any file that runs **zero** tests or **skips** one.
+- **`.github/workflows/gem-ci.yml`** — the gem's first CI lane. Runs the suite, builds the gem, and asserts the engine's files are inside the **built artifact** (a manifest can be right while the build excludes a file; only the artifact is what a consumer installs).
+
+### Changed
+- **`spec.files` now includes `app/**/*`.** This is the highest-consequence line in the gemspec: the release sweep publishes on membership rather than content, so a view left outside this glob would ship an engine with no views in it — green suite, green CI, green sweep, and a `missing partial` raised in a consumer app. `test/gemspec_test.rb` asserts the **invariant** (every file in a shipped tree is in the manifest) rather than a filename checklist, which would pass forever while the next new file escaped.
+
+### Tests
+- `test/network_test.rb` (13): genesis hashes asserted literally rather than round-tripped through the table that defines them; the three-state alignment, each state separately; `canonical` returning nil rather than a default for an unknown name; and that no boolean exists to collapse the third state.
+- `test/engine_test.rb` (6): the conditional in both directions, in separate processes (`require` is idempotent, so one process cannot observe both).
+- `test/gemspec_test.rb` (8): the packaging invariant, no directory entries, the version file's single literal asserted with the RELEASE CONDUCTOR'S OWN regex rather than a proxy for it, the gemspec holding no literal of its own, and no Rails runtime dependency.
+- `test/network_guard_js_test.rb` (18): the classifier under node, including the inversion found in review — a custom program error outranks the "Transaction simulation failed" wrapper, so a full contest is never reported as a network problem — plus the wrapper's transparency: original error re-thrown, success passed through, a throwing hint callback unable to replace the real error.
+- `test/views_test.rb` (3): every shipped ERB template compiles under **ActionView's** Erubi (stdlib ERB cannot compile the `render … do` block form), the glob is non-empty, and the modal still renders the wallet's own error text.
+
 ## v0.4.7 (2026-06-05)
 
 ### Added

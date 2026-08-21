@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# The gem's one entry point for "is this tree releasable?" — used by a local
+# cert, by CI, and before a version bump, so those three can never drift apart.
+#
+# Two properties earn this script its existence over a bare `ruby -Itest`:
+#
+#   1. It enumerates test files by GLOB. There is no curated list to forget a
+#      file from — a new test/*_test.rb is covered the moment it lands.
+#   2. It fails a file that runs ZERO tests or SKIPS one. A suite that quietly
+#      stops covering something is the failure mode a green build cannot show
+#      you, and this gem's JS lane is exactly that shape: without node, its
+#      tests would vanish rather than fail.
+#
+# Usage: bin/release-check [--list|--build]
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+# Match the ecosystem toolchain (brew ruby@3.3) when it is installed.
+if [ -d /opt/homebrew/opt/ruby@3.3/bin ]; then
+  export PATH="/opt/homebrew/opt/ruby@3.3/bin:/opt/homebrew/lib/ruby/gems/3.3.0/bin:$PATH"
+fi
+
+run_list() {
+  # Sorted so a failure is reproducible in the order it was reported.
+  find test -name '*_test.rb' -type f | LC_ALL=C sort
+}
+
+build=0
+case "${1:-}" in
+  "") ;;
+  "--list") run_list; exit 0 ;;
+  "--build") build=1 ;;
+  *) echo "Usage: bin/release-check [--list|--build]" >&2; exit 64 ;;
+esac
+
+echo "Ruby:         $(ruby -v)"
+echo "SolanaStudio: $(ruby -Ilib -e 'require "solana_studio"; print SolanaStudio::VERSION')"
+echo "node:         $(node --version 2>/dev/null || echo 'MISSING — the JS lane will fail')"
+echo
+
+files="$(run_list)"
+if [ -z "$files" ]; then
+  echo "FAIL: no test files matched test/**/*_test.rb" >&2
+  exit 1
+fi
+
+failed=0
+total_runs=0
+
+while IFS= read -r file; do
+  printf '%-44s' "$file"
+  # Per-file so a zero-run or skipped file is attributable. Output is captured
+  # and only echoed on trouble, keeping a green run readable.
+  if ! output="$(bundle exec ruby -Itest "$file" 2>&1)"; then
+    echo "FAIL"
+    echo "$output"
+    failed=1
+    continue
+  fi
+
+  summary="$(printf '%s' "$output" | grep -E '^[0-9]+ runs,' | tail -1)"
+  if [ -z "$summary" ]; then
+    echo "FAIL (no minitest summary — did the file load?)"
+    echo "$output"
+    failed=1
+    continue
+  fi
+
+  runs="$(printf '%s' "$summary" | sed -E 's/^([0-9]+) runs.*/\1/')"
+  skips="$(printf '%s' "$summary" | sed -E 's/.*, ([0-9]+) skips$/\1/')"
+
+  if [ "$runs" -eq 0 ]; then
+    echo "FAIL (0 tests ran — this file covers nothing)"
+    failed=1
+    continue
+  fi
+
+  if [ "$skips" -ne 0 ]; then
+    # A skip is invisible lost coverage. Make it loud.
+    echo "FAIL ($skips skipped — a skip is coverage you no longer have)"
+    echo "$output"
+    failed=1
+    continue
+  fi
+
+  total_runs=$((total_runs + runs))
+  echo "ok ($runs tests)"
+done <<< "$files"
+
+echo
+if [ "$failed" -ne 0 ]; then
+  echo "release-check: FAILED"
+  exit 1
+fi
+
+file_count="$(printf '%s\n' "$files" | grep -c .)"
+echo "release-check: PASSED — $file_count files, $total_runs tests"
+
+if [ "$build" -eq 1 ]; then
+  echo
+  echo "Building gem..."
+  gem build solana-studio.gemspec
+fi
