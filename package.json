@@ -1,0 +1,11 @@
+{
+  "name": "solana-studio-e2e",
+  "private": true,
+  "description": "Browser lane for the solana-studio gem's onchain surface. Not published — the gem ships no npm package.",
+  "scripts": {
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

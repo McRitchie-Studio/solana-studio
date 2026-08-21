@@ -1,0 +1,31 @@
+<%# Renders the SHIPPED modal, through the engine's real modal host.
+
+    Both partials are rendered BY NAME. Nothing here restates what either does:
+    the host owns the backdrop, the scroll lock, the escape key and the Alpine
+    store; the gem's partial owns the card. A lab page that hand-rolled either
+    would leave the specs grading the lab.
+
+    The open hook runs the REAL classifier to build its props rather than passing
+    a hand-made hash, so a spec here drives the whole chain end to end — an error
+    string a wallet actually emits, through explain(), into the partial, onto the
+    screen. Hand-made props would prove the partial paints something, which is the
+    weaker half of the question. %>
+<main data-test="modal-lab">
+  <%= render "studio/modals/host" do %>
+    <template x-if="$store.modals.current().id === 'network-mismatch'">
+      <%= render "solana_studio/modals/network_mismatch" %>
+    </template>
+  <% end %>
+</main>
+
+<script>
+  // Returns the props the real guard produced, or null when it declined to
+  // classify — so a spec can assert BOTH that a mismatch-shaped error opens the
+  // modal and that an unrelated one does not.
+  window.labOpenFor = function(errMessage) {
+    var hint = window.SolanaStudio.network.explain(errMessage, { action: "Entering this contest" });
+    if (!hint) return null;
+    window.Alpine.store('modals').open('network-mismatch', hint);
+    return hint;
+  };
+</script>

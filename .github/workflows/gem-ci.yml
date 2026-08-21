@@ -75,3 +75,58 @@ jobs:
             }
           done
           echo "Engine files present in the built gem."
+
+  # ── THE BROWSER LANE ────────────────────────────────────────────────────────
+  #
+  # A PARALLEL job, not a step inside bin/release-check, and that is deliberate:
+  # it runs alongside the Ruby suite so it adds ~0 to the wall time a PR waits,
+  # and a gem release does not have to install a browser to publish.
+  #
+  # WHY IT EXISTS. This gem ships an imperative browser program and an ERB partial
+  # no Ruby tier can render. Standing this lane up caught, on its FIRST real run, a
+  # defect already merged and already past two reviewers, CI, and 114 tests: an ERB
+  # comment in the shipped modal terminated early and leaked `%>` into the rendered
+  # card. test/views_test.rb was green throughout — it proves the template COMPILES,
+  # and a template can compile perfectly while rendering wrong.
+  playwright:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install node deps
+        run: npm ci || npm install
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the browser lane
+        run: npx playwright test
+
+      # THE VERDICT GATE. The job above can say its specs PASSED; it cannot say it
+      # RAN THEM ALL. This reads Playwright's own receipt and asserts the executed
+      # set against config/e2e_lane.yml — where a runtime skip, a stray --grep, an
+      # uncollected file and --only-changed all surface as the same arithmetic
+      # failure instead of four different invisible ones.
+      #
+      # Runs in the SAME job, after the lane, because it needs the receipt the lane
+      # just wrote. `if: always()` so a failing lane is still audited for coverage
+      # rather than hiding a narrowed set behind a red spec.
+      - name: Assert the lane executed its whole declared set
+        if: always()
+        run: bin/e2e-executed-set-check
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-trace
+          path: test-results/
+          retention-days: 7

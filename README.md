@@ -188,6 +188,40 @@ modal blocks. The JS is `solana_studio/network_guard.js` on the asset path.
 
 See [RUNBOOK.md](./RUNBOOK.md) for troubleshooting and local test commands.
 
+### The browser lane
+
+The Ruby suite cannot see two things this gem ships: whether
+`network_guard.js` actually **runs** in a browser, and whether
+`_network_mismatch.html.erb` **renders** (rendering it needs studio-engine's modal
+blocks and a view context, so `test/views_test.rb` only proves it compiles).
+
+```bash
+npm ci && npx playwright install chromium
+npx playwright test              # ~40s, boots its own server
+npx playwright test --headed     # watch it
+bin/e2e-executed-set-check       # did the lane run its WHOLE declared set?
+```
+
+The lane drives the **shipped bytes**: `e2e/boot.rb` copies the real
+`app/assets/javascripts/solana_studio/network_guard.js` into the dummy's `public/`,
+and the lab pages render the real partials by name. A lab page may set up a
+partial's locals and nothing else — `test/e2e_lane_contract_test.rb` asserts that,
+because a page that hand-rolled what the gem does would leave the specs grading the
+lab while reporting green over untested gem code.
+
+It is **not** in `bin/release-check`. It runs as a parallel CI job, so it adds ~0
+to the wall time a PR waits and a release does not install a browser to publish.
+
+**Two halves, one number.** `config/e2e_lane.yml` declares how many specs must
+execute. `bin/e2e-executed-set-check` reads Playwright's own receipt after the run
+and asserts the executed set against it; `test/e2e_lane_contract_test.rb` asserts
+the committed specs still declare it. Static counting answers "how many are
+DECLARED" and can never answer "how many RAN" — and a runtime skip, a stray
+`--grep`, `--only-changed`, and an uncollected file are four spellings of the same
+event. The receipt turns all four into one arithmetic failure.
+
+Derive the counts, never hand-count them: `npx playwright test --list`.
+
 Run the suite with `bin/release-check` — the same entry point CI and the release
 gate use, so they cannot drift apart. It enumerates test files by glob (no list
 to forget a file from) and **fails a file that runs zero tests or skips one**,
