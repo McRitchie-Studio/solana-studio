@@ -16,3 +16,10 @@ playwright-report/
 # them would create a second copy of files this lane exists to prove are the ones
 # that ship — and a stale one, the moment either source moves.
 test/dummy/public/
+
+# Agent desks. bin/agent-worktree creates <repo>/.worktrees/ in every repo it
+# manages OR DISCOVERS — and it discovers this one. Untracked, the directory
+# leaves the primary checkout permanently dirty from the moment a desk exists,
+# which violates the clean-up SOP's "every primary checkout must end clean" and
+# blocks any ship that requires one.
+.worktrees/
