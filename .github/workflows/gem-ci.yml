@@ -66,6 +66,7 @@ jobs:
           echo "$contents"
           for required in \
             app/views/solana_studio/modals/_network_mismatch.html.erb \
+            app/views/solana_studio/auth/_wallet_credential.html.erb \
             app/assets/javascripts/solana_studio/network_guard.js
           do
             echo "$contents" | grep -qF "$required" || {

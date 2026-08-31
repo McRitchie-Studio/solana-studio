@@ -52,6 +52,7 @@ class GemspecTest < Minitest::Test
     # the guard it loads. Named explicitly so a failure reads as "the engine is
     # not in the gem" rather than a generic count mismatch.
     assert_includes spec.files, "app/views/solana_studio/modals/_network_mismatch.html.erb"
+    assert_includes spec.files, "app/views/solana_studio/auth/_wallet_credential.html.erb"
     assert_includes spec.files, "app/assets/javascripts/solana_studio/network_guard.js"
   end
 
