@@ -1,0 +1,167 @@
+<%#
+  Phantom MOBILE deep link — the round trip a phone needs to sign in with a
+  wallet. On desktop Phantom is a browser extension the page can call directly;
+  on a phone it is a separate APP, so the page hands off to it and comes back.
+
+  PROMOTED from turf-monster (app/javascript/phantom_deeplink.js) so every
+  consumer gets it. The server half was already shared — the engine's
+  solana_sessions_controller owns nonce + verify and Solana::SessionAuth owns
+  verify_solana_signature! — only this mobile round trip was app-side.
+
+  Render it once, wherever the Connect-Wallet flow can be reached — an ERB
+  output tag rendering the partial path "solana_studio/phantom_deeplink".
+  (Described rather than quoted on purpose: an ERB comment ends at the first
+  close sequence, so spelling the tag out here would terminate this comment and
+  leak the rest of it as visible text into every consuming app. The engine's
+  erb_comment_leak_test enforces that, and it caught this very paragraph.)
+
+  It defines window.startPhantomDeepLink(linkMode, currentUserId). The engine's
+  wallet picker (solana_studio/modals/_wallet_connect) gates its mobile Phantom row on
+  that function EXISTING, so a consumer that does not render this partial keeps
+  its install row instead of painting a button that does nothing.
+
+  THREE THINGS THAT MUST NOT BE MADE CONFIGURABLE — traced through
+  Solana::SessionAuth#verify_solana_signature! before this was generalised:
+
+    domain        the client builds it from window.location.host and the server
+                  checks it against request.host_with_port (OPSEC-018). An app
+                  override breaks sign-in.
+    User-ID line  OPSEC-005 does a SUBSTRING match on "User-ID: <id>". Do not
+                  reformat it and do not translate it.
+    the nonce     deleted server-side BEFORE verification; that is the replay
+                  protection for the login path.
+
+  The STATEMENT is the one part that varies, and it varies safely: the server
+  does NOT verify it — it is what the human reads inside Phantom. It derives
+  from Studio.app_name, which reproduces turf-monster's previous literal
+  ("Sign in to Turf Monster") BYTE FOR BYTE, so promoting this changed no
+  signed message. It MUST match the callback's copy exactly, because the
+  callback reconstructs the signed message to post for verification — both read
+  this same helper, which is why they cannot drift.
+
+  Requires tweetnacl (window.nacl); render "solana_studio/deeplink_assets"
+  first, or supply it yourself.
+%>
+<script>
+  (function () {
+    var STATEMENT = <%= Studio.wallet_sign_in_statement.to_json.html_safe %>;
+
+    // Base58, INLINE and self-contained. turf-monster took this from a separate
+    // app/javascript/base58.js module that assigned window.encodeBase58, so its
+    // deep link depended on a second global. Promoting only the deep link would
+    // have left encodeBase58 undefined in any consumer without that file — it
+    // throws on the first keypair encode, at the moment the user taps Connect.
+    // The callback view already carries its own codec for the same reason; this
+    // matches it, so the partial has exactly one dependency (nacl) and it is a
+    // guarded one.
+    // THE CONSTANT THE ENCODER READS. It was left behind when the function body
+    // was inlined: base58.js declares it at module scope, so it is unreachable
+    // from a classic script, and encodeBase58 referenced a free variable that
+    // resolved to nothing AT CALL TIME. Every mobile sign-in threw
+    // "B58_ALPHABET is not defined" on the first keypair encode.
+    //
+    // Invisible to eleven passing view tests and to a browser spec that checked
+    // `typeof startPhantomDeepLink` without ever CALLING it. A parse-time
+    // mutation cannot reach this class either — the program parses fine.
+    const B58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+
+    function encodeBase58(bytes) {
+      const digits = [0];
+      for (let i = 0; i < bytes.length; i++) {
+        let carry = bytes[i];
+        for (let j = 0; j < digits.length; j++) {
+          carry += digits[j] << 8;
+          digits[j] = carry % 58;
+          carry = (carry / 58) | 0;
+        }
+        while (carry) { digits.push(carry % 58); carry = (carry / 58) | 0; }
+      }
+      let str = '';
+      for (let i = 0; i < bytes.length && bytes[i] === 0; i++) str += '1';
+      for (let i = digits.length - 1; i >= 0; i--) str += B58_ALPHABET[digits[i]];
+      return str;
+    }
+
+    // Phantom deep link protocol for mobile browsers
+    // Uses signIn deep link — ONE trip to Phantom (connect + sign combined)
+    // Flow: generate keypair → fetch nonce → build SIWS input → redirect to Phantom signIn
+
+    function startPhantomDeepLink(linkMode, currentUserId) {
+      // The consumer declares its cluster on <body data-solana-cluster="...">.
+  // turf-monster does; an app that does NOT silently signs against devnet while
+  // its wallet is on mainnet, which reads to the user as a rejected signature
+  // and to the log as nothing. Warn loudly rather than guess quietly — the
+  // default stays devnet so behaviour is unchanged for anyone already relying
+  // on it.
+  var cluster = document.body.dataset.solanaCluster;
+  if (!cluster) {
+    console.warn('[StudioSolana] no data-solana-cluster on <body>; defaulting to devnet. ' +
+                 'Set it on the body tag to sign against the cluster you mean.');
+    cluster = 'devnet';
+  }
+      var callbackUrl = window.location.origin + '/auth/phantom/callback';
+
+      // Generate x25519 keypair for decrypting Phantom's response
+      var dappKeyPair = nacl.box.keyPair();
+
+      // Fetch nonce from server, then redirect to Phantom signIn
+      fetch('/auth/solana/nonce')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          // OPSEC-005: when linking a wallet to a logged-in user, embed
+          // `User-ID: <id>` so the server can refuse signatures captured
+          // against a different session's nonce. Login (no currentUserId)
+          // skips the binding line.
+          var statement = STATEMENT;
+          if (linkMode && currentUserId) {
+            statement = statement + '\nUser-ID: ' + currentUserId;
+          }
+
+          // Build SIWS input (CAIP-122 / Sign In With Solana format)
+          // Note: chainId omitted — optional per spec, avoids mismatch warning
+          // when app is on devnet but user's wallet is on mainnet
+          var signInInput = {
+            domain: window.location.host,
+            statement: statement,
+            uri: window.location.origin,
+            version: '1',
+            nonce: data.nonce,
+            issuedAt: new Date().toISOString()
+          };
+
+          // Save state to localStorage (persists across redirect)
+          localStorage.setItem('phantom_dl_secret', encodeBase58(dappKeyPair.secretKey));
+          localStorage.setItem('phantom_dl_pubkey', encodeBase58(dappKeyPair.publicKey));
+          localStorage.setItem('phantom_dl_nonce', data.nonce);
+          localStorage.setItem('phantom_dl_nonce_at', Date.now().toString());
+          localStorage.setItem('phantom_dl_step', 'signIn');
+          localStorage.setItem('phantom_dl_link_mode', linkMode ? 'true' : 'false');
+          localStorage.setItem('phantom_dl_cluster', cluster);
+          if (currentUserId) {
+            localStorage.setItem('phantom_dl_user_id', String(currentUserId));
+          } else {
+            localStorage.removeItem('phantom_dl_user_id');
+          }
+
+          // Base58-encode the SIWS input JSON (NOT encrypted — per Phantom signIn protocol)
+          var payloadB58 = encodeBase58(new TextEncoder().encode(JSON.stringify(signInInput)));
+
+          // Build Phantom signIn deep link
+          var params = new URLSearchParams({
+            dapp_encryption_public_key: encodeBase58(dappKeyPair.publicKey),
+            cluster: cluster,
+            app_url: window.location.origin,
+            redirect_link: callbackUrl,
+            payload: payloadB58
+          });
+
+          window.location.href = 'https://phantom.app/ul/v1/signIn?' + params.toString();
+        })
+        .catch(function(err) {
+          alert('Failed to start Phantom connection: ' + err.message);
+        });
+    }
+
+    window.startPhantomDeepLink = startPhantomDeepLink;
+  })();
+</script>

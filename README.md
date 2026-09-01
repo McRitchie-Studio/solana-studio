@@ -214,6 +214,60 @@ Why a contributed button and not a second auth modal: Turf Monster wants Google
 plus magic-link plus wallet, McRitchie Studio wants Google plus magic-link. A
 forked modal would put a surface both apps sign in through into two files, which
 is how the wallet picker reached three copies before it was promoted.
+### Web3 modals
+
+Four partials promoted out of studio-engine, where every consumer paid for them
+whether or not it shipped a chain feature at all:
+
+| Virtual path | What it is |
+|---|---|
+| `solana_studio/modals/wallet_connect` | The Connect-Wallet picker — detected wallets, install rows, and Phantom's mobile deep-link row |
+| `solana_studio/modals/web3_step_up` | The sign-with-your-wallet step-up card |
+| `solana_studio/phantom_deeplink` | Defines `window.startPhantomDeepLink(linkMode, currentUserId)` — the phone round trip |
+| `solana_studio/deeplink_assets` | An idempotent, non-blocking tweetnacl loader for that round trip |
+
+```erb
+<%# once, inside your modal host %>
+<template x-if="$store.modals.current().id === 'wallet-connect'">
+  <%= render "solana_studio/modals/wallet_connect" %>
+</template>
+
+<template x-if="$store.modals.current().id === 'web3-step-up'">
+  <%= render "solana_studio/modals/web3_step_up" %>
+</template>
+```
+
+Render `solana_studio/phantom_deeplink` **once**, anywhere the Connect-Wallet
+flow can be reached. The picker gates its mobile Phantom row on
+`startPhantomDeepLink` existing, so a host that skips it keeps the install row
+instead of painting a button that does nothing.
+
+**These require studio-engine at render time.** They render its modal host and
+its shared blocks (`studio/modals/blocks/wallet_brand_sprite`, `.../card_header`)
+by name, paint with its utilities (`badge`, `pulse-cta`, `spinner`) and theme
+role tokens, and drive its store through `$store.<store>.swap()`. studio-engine
+stays a **development** dependency here — a runtime one would drag Rails into
+every plain-Ruby consumer, which is what `lib/solana_studio/engine.rb`'s guard
+exists to prevent — so this is a documented host requirement, not something the
+gem can enforce from inside. `solana_studio/modals/network_mismatch` already
+shipped on exactly these terms.
+
+#### The signed statement is not configurable
+
+`solana_studio/phantom_deeplink` emits `Studio.wallet_sign_in_statement`, and it
+must keep doing so. studio-engine's `solana_sessions/phantom_callback`
+**rebuilds** the signed message to post for verification, so the two read one
+accessor precisely so they cannot drift; a caller-supplied statement would break
+the signature check on every mobile sign-in. `test/web3_modals_test.rb` pins
+this from both directions.
+
+#### Choosing between the loader and your own tag
+
+`solana_studio/deeplink_assets` **appends** a script element, so it is
+asynchronous. A callback that reads `nacl` at parse time will lose that race.
+Adopt the loader only together with a callback that waits; otherwise keep a
+blocking `<script>` tag of your own with the same SRI-pinned URL. turf-monster
+deliberately does the latter.
 
 ## Dependencies
 
@@ -225,6 +279,33 @@ is how the wallet picker reached three copies before it was promoted.
 ## Development Notes
 
 See [RUNBOOK.md](./RUNBOOK.md) for troubleshooting and local test commands.
+
+### 🧊 The durable-nonce primitives have two consumers, and one of them is on ice
+
+`Solana::SystemProgram` and `Solana::NonceAccount` landed together in **v0.4.6
+(2026-06-02, `11ec512`)** for **two** consumers at once, and the commit says so:
+*"the reusable core for the signing console's two-browser flow and for making
+turf's operator tx flows expiry-immune."*
+
+**The first of those went on ice on 2026-08-31.** McRitchie Studio's admin
+signing console — N wallets signing in separate browsers, anchored on a durable
+nonce so a half-signed transaction does not expire between signers — is **frozen
+in place: still working, not removed, not deprecated**, and not expected to drive
+any further work in this gem. Its full note (why it was frozen, and the one
+question that would revive it) lives in the hub, at `docs/SIGNING_CONSOLE_V2.md`.
+
+**Do not read that as permission to drop these two files.** The second consumer
+is the one in production:
+
+| Primitive | Live use |
+|---|---|
+| `Solana::SystemProgram.advance_nonce_account` | turf-monster prepends it as **instruction #0** of a durable-nonce vault cosign transaction (`app/services/solana/vault.rb`). Its cosign validator also **allow-lists exactly this one System instruction** — a nonce-anchored entry with any other System instruction is rejected. |
+| `Solana::NonceAccount.parse` | turf-monster reads the on-chain nonce account in the same path. |
+
+So the frozen consumer is the *quieter* one, never the only one. Both primitives
+are byte-match tested in `test/system_program_test.rb`, and a change to either
+still lands on turf-monster's money path — treat them as `onchain`, not as dead
+code left over from a shelved tool.
 
 ### The browser lane
 

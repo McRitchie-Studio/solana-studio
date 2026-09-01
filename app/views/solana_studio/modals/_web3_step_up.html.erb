@@ -1,0 +1,292 @@
+<%#
+  Web3 step-up — the shared "your session cannot sign on-chain" card.
+
+  THE SITUATION IT NAMES: an account that holds a self-custody wallet signs in
+  with a WEB2 credential — a magic link, email, or Google. Both facts are
+  ordinary alone; together they mean the person is signed in but cannot sign
+  anything on-chain. `SessionContext` has modelled that intersection since it was
+  lifted into this engine (`web2?` AND `phantom_linked?`) and nothing acted on
+  it, so every web3 Studio app logged a wallet owner straight in with no web3
+  beat at all. This partial is the missing step; SessionContext stays the state.
+
+  Ported from turf-monster (2026-08-21), where it shipped first as the working
+  vertical. What is NOT shared — and deliberately stays in the host — is WHEN to
+  show it and what it costs to dismiss: the host's policy decides who sees the
+  card, and the host's gates keep their own teeth. This partial owns ONE step.
+
+  ADVISORY BY CONSTRUCTION. The card is dismissible and says so. A self-custody
+  wallet is the one credential a host cannot reset for a user, so a card that
+  could not be closed would lock a legitimate owner out of their own account
+  over a wallet they merely cannot reach right now. That is why the escape hatch
+  below is not optional decoration — and why enforcement must live in the host's
+  on-chain gates, never in this card.
+
+  Locals (all optional, defaults via local_assigns.fetch):
+    heading         — (default "Sign in with your wallet")
+    subtext         — the one-line why
+    help_url        — the escape hatch for a user who cannot reach their wallet
+                      (default "/help"). Set to nil to drop the line entirely.
+    help_label      — (default "Get help")
+    picker_modal_id — the host's brand picker, reached by "Use a different
+                      wallet" (default "wallet-connect"). The picker is expected
+                      to honour a `backTo` prop pointing back at this card.
+    modal_id        — this card's own id, passed to the picker as backTo
+                      (default "web3-step-up")
+    modal_store     — Alpine store name (default "modals"; the living style
+                      guide mounts a page-scoped host and passes "dsModals")
+    dismiss_event   — window event dispatched on dismissal (default
+                      "web3-step-up-dismissed"). The HOST decides what happens
+                      next — typically releasing an onboarding chain it held
+                      while this card had the screen. This partial never opens
+                      another modal itself.
+
+  PROPS (set by the opener, all optional — the host's policy produces them):
+    provider      — normalised brand key ('phantom' / 'solflare' / 'backpack'),
+                    or null when the account linked its wallet before the host
+                    started remembering the brand.
+    providerLabel — how that brand writes its own name, for the row.
+    walletHint    — the truncated address (4…4), so the user can confirm the
+                    card is asking for the wallet they think it is.
+
+  WITH a remembered provider this is ONE row. Without one it is the same card
+  with the picker as its primary action — the fallback is never a dead end.
+
+  CONTRACT WITH THE HOST'S JS. Signing calls `window.solanaConnectAndVerify(name,
+  { linkMode: false })`, the global every web3 Studio app already provides, and
+  hands a success to `window.handleSolanaVerifySuccess` when present. linkMode is
+  deliberately FALSE: the link path binds to the current user but does not grant
+  the on-chain session, which is the thing this card exists to obtain. One
+  inherited consequence, stated plainly: signing with a DIFFERENT wallet signs
+  you into that wallet's account, exactly as a standalone wallet button does. The
+  walletHint is shown precisely so that is a visible choice, not a surprise.
+
+  CRITICAL (Alpine): this partial is cloned from a <template x-if> by the modal
+  host, so it must have ONE root element, and the x-data below is a
+  DOUBLE-QUOTED attribute — a single " anywhere inside it (a code comment
+  included) closes it early and the whole component mounts as a silent no-op that
+  still renders markup. Keep every inner string SINGLE-quoted.
+%>
+<%
+  heading         = local_assigns.fetch(:heading, "Sign in with your wallet")
+  subtext         = local_assigns.fetch(:subtext,
+                      "This account is secured by a Solana wallet. You are signed in, but this " \
+                      "session can’t sign on-chain — so on-chain actions still need your wallet.")
+  help_url        = local_assigns.fetch(:help_url, "/help")
+  help_label      = local_assigns.fetch(:help_label, "Get help")
+  picker_modal_id = local_assigns.fetch(:picker_modal_id, "wallet-connect")
+  modal_id        = local_assigns.fetch(:modal_id, "web3-step-up")
+  modal_store     = local_assigns.fetch(:modal_store, "modals")
+  dismiss_event   = local_assigns.fetch(:dismiss_event, "web3-step-up-dismissed")
+%>
+<div x-data="{
+       get props() { var c = $store.<%= modal_store %>.current(); return (c && c.props) || {}; },
+       connecting: false,
+       error: '',
+       // Set when the remembered wallet turns out not to be reachable in THIS
+       // browser (a different machine, the extension removed). It flips the card
+       // to the picker rather than leaving the user pressing a button that
+       // cannot work.
+       providerMissing: false,
+       // Which wallets this document can actually see. Read on a poll, NOT once
+       // at mount: wallet provider registration fills in asynchronously, and
+       // this card auto-opens on the render right after auth — the worst
+       // possible moment. A single early read is a coin flip that would badge an
+       // installed wallet as missing.
+       wallets: [],
+       _poll: null,
+       _onRegister: null,
+       get provider() { return this.props.provider || null; },
+       get providerLabel() { return this.props.providerLabel || null; },
+       get walletHint() { return this.props.walletHint || null; },
+       // One-click only while we remember a brand AND it is still reachable.
+       get canOneClick() { return !!this.provider && !this.providerMissing; },
+       // Does the remembered brand answer in THIS document right now? Drives the
+       // Installed badge, the same one the connect picker shows, so a detected
+       // wallet reads identically in both places.
+       get detected() {
+         var name = ('' + (this.provider || '')).toLowerCase();
+         if (!name) return false;
+         return (this.wallets || []).some(function(w) { return w.name && w.name.toLowerCase() === name; });
+       },
+       init() {
+         var self = this;
+         this.refresh();
+         this._onRegister = function() { if (!self.connecting) self.refresh(); };
+         window.addEventListener('wallet-standard:register-wallet', this._onRegister);
+         this._poll = setInterval(function() {
+           if (self.connecting) return;
+           self.refresh();
+           if (self.wallets.length > 0) { clearInterval(self._poll); self._poll = null; }
+         }, 1000);
+       },
+       destroy() {
+         if (this._poll) clearInterval(this._poll);
+         if (this._onRegister) window.removeEventListener('wallet-standard:register-wallet', this._onRegister);
+       },
+       refresh() {
+         this.wallets = (window.walletProvider && window.walletProvider.available && window.walletProvider.available()) || [];
+       },
+       reachable(name) {
+         if (!window.walletProvider || !window.walletProvider.get) return false;
+         return !!window.walletProvider.get(name);
+       },
+       async signIn() {
+         if (this.connecting) return;
+         var name = this.provider;
+         if (!name) return this.openPicker();
+         if (!this.reachable(name)) {
+           this.providerMissing = true;
+           this.error = 'We could not reach your ' + (this.providerLabel || 'wallet') + ' in this browser.';
+           return;
+         }
+         if (typeof window.solanaConnectAndVerify !== 'function') {
+           this.error = 'Wallet sign-in is unavailable on this page.';
+           return;
+         }
+         this.connecting = true; this.error = '';
+         try {
+           var result = await window.solanaConnectAndVerify(name, { linkMode: false });
+           if (result && result.success) {
+             if (typeof window.handleSolanaVerifySuccess === 'function') window.handleSolanaVerifySuccess(result);
+             // Reload rather than follow a redirect: the user was already
+             // somewhere, and the only thing that changed is that this session
+             // can now sign. Sending them to a post-login landing would move
+             // them off the page they were reading.
+             window.location.reload();
+             return;
+           }
+           this.error = (result && result.error) || 'Verification failed.';
+         } catch (e) {
+           var msg = (e && e.code === 4001) ? 'Signature rejected' : ((e && e.message) || 'Connection failed');
+           if (typeof parseSolanaError === 'function') msg = parseSolanaError(msg);
+           this.error = msg;
+         }
+         this.connecting = false;
+       },
+       // Hand off to the host's brand picker. swap() rather than open() so the
+       // picker's back arrow returns HERE instead of stranding the user.
+       openPicker() {
+         if (this.connecting) return;
+         $store.<%= modal_store %>.swap('<%= picker_modal_id %>',
+           { backTo: '<%= modal_id %>', stepUpProps: this.props, returnUrl: window.location.href });
+       },
+       // Dismiss. Dispatched so the HOST knows this card is done and can release
+       // whatever it was holding — this partial never opens another modal.
+       dismiss() {
+         if (this.connecting) return;
+         window.dispatchEvent(new CustomEvent('<%= dismiss_event %>'));
+         $store.<%= modal_store %>.close();
+       }
+     }"
+     class="relative">
+
+  <%# Brand sprite — MUST live inside this card's single root so the host's
+      <template x-if> clones it along with the card. A sibling of the root is
+      dropped and the icon paints empty. %>
+  <%= render "studio/modals/blocks/wallet_brand_sprite" %>
+
+  <div class="relative mb-1">
+    <button @click="dismiss()" :disabled="connecting"
+            class="absolute top-0 right-0 -mr-1 text-secondary hover:text-heading text-xl leading-none disabled:opacity-50"
+            aria-label="Close">&times;</button>
+  </div>
+
+  <%= render "studio/modals/blocks/card_header", icon_emoji: "🔐", title: heading do %>
+    <p class="text-sm text-body"><%= subtext %></p>
+  <% end %>
+
+  <%# PRIMARY — THE STANDARD WEB3 AUTH BUTTON: a wallet row, not a filled CTA.
+      Same shape the connect picker uses — brand mark, the wallet's own name, an
+      Installed badge, chevron — so a wallet reads identically everywhere it is
+      offered and this card does not invent a third look for one action.
+
+      It carries `pulse-cta` (engine-motion) because it is the ONE target on the
+      card and the whole point of the card is that the user should press it. %>
+  <template x-if="canOneClick">
+    <div>
+      <button type="button" @click="signIn()" :disabled="connecting"
+              style="--pulse-cta-color: var(--color-primary); --pulse-cta-strength: 0.4; --pulse-cta-scale: 1.02"
+              class="pulse-cta w-full flex items-center gap-3 p-3 rounded-xl bg-surface-alt border border-strong hover:bg-surface transition text-left disabled:opacity-60 disabled:cursor-wait">
+        <span class="w-9 h-9 rounded-lg overflow-hidden flex items-center justify-center shrink-0">
+          <svg class="w-9 h-9" aria-hidden="true"><use :href="'#se-wallet-' + provider"></use></svg>
+        </span>
+        <span class="font-semibold text-heading" x-text="providerLabel"></span>
+        <span class="ml-auto flex items-center gap-2">
+          <span x-show="connecting" class="inline-flex items-center gap-1.5 text-xs text-secondary"><span class="spinner" aria-hidden="true"></span>Connecting&hellip;</span>
+          <span x-show="!connecting && detected" class="badge border-primary text-primary">Installed</span>
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4 text-muted">
+            <path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+          </svg>
+        </span>
+      </button>
+      <%# One line on what pressing it DOES. A signature prompt is alarming
+          without it, and "no funds move" is the difference between clicking and
+          bailing. The address rides here so the user can confirm the card is
+          asking for the wallet they think it is. %>
+      <p class="text-[11px] text-muted mt-1.5 px-1">
+        Signing proves the wallet is yours &mdash; it does not move any funds.
+        <template x-if="walletHint">
+          <span>Wallet <span class="font-mono text-secondary" x-text="walletHint"></span></span>
+        </template>
+      </p>
+    </div>
+  </template>
+
+  <%# No remembered brand — the same row shape with no mark to show, so the two
+      halves of this card look like one card. %>
+  <template x-if="!canOneClick">
+    <button type="button" @click="openPicker()" :disabled="connecting"
+            style="--pulse-cta-color: var(--color-primary); --pulse-cta-strength: 0.4; --pulse-cta-scale: 1.02"
+            class="pulse-cta w-full flex items-center gap-3 p-3 rounded-xl bg-surface-alt border border-strong hover:bg-surface transition text-left disabled:opacity-60">
+      <%# A neutral wallet mark, NOT an emoji. This tile sits inches from a real
+          brand mark, so a platform emoji (the first pass used U+1F45B PURSE)
+          reads as a pink handbag next to Phantom and is the one thing on the
+          card that belongs to no design system. Stroked in the same idiom as
+          the chevron beside it, on theme tokens.
+
+          A billfold: body plus clasp, and NO band across the top. The first
+          drawing had one and it read as a credit-card magstripe at 20px — the
+          wrong object on a card whose whole subject is a wallet. %>
+      <span class="w-9 h-9 rounded-lg bg-inset flex items-center justify-center shrink-0" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" class="w-5 h-5 text-secondary">
+          <rect x="3" y="6.5" width="18" height="11" rx="2.5" />
+          <circle cx="16.6" cy="12" r="1.3" fill="currentColor" stroke="none" />
+        </svg>
+      </span>
+      <span class="font-semibold text-heading">Connect your wallet</span>
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="ml-auto w-4 h-4 text-muted">
+        <path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+      </svg>
+    </button>
+  </template>
+
+  <template x-if="error">
+    <p role="alert" class="text-red-400 text-sm mt-3 text-center" x-text="error"></p>
+  </template>
+
+  <%# SECONDARY — always reachable, so a user whose remembered wallet is the
+      wrong one is never cornered by our memory of it. %>
+  <template x-if="canOneClick">
+    <button type="button" @click="openPicker()" :disabled="connecting"
+            class="mt-3 block w-full text-center text-sm text-secondary hover:text-heading disabled:opacity-50">
+      Use a different wallet
+    </button>
+  </template>
+
+  <div class="mt-4 pt-3 border-t border-strong">
+    <button type="button" @click="dismiss()" :disabled="connecting"
+            class="block w-full text-center text-sm text-secondary hover:text-heading disabled:opacity-50">
+      Not now
+    </button>
+    <%# THE ESCAPE HATCH. A self-custody wallet is the one credential a host
+        cannot reset for the user, so the card must not end without a way to
+        reach a human. Droppable only by passing help_url: nil, which is a
+        deliberate act at the callsite rather than an omission. %>
+    <% if help_url.present? %>
+      <p class="mt-2 text-center text-[11px] text-muted">
+        Can&rsquo;t access your wallet?
+        <a href="<%= help_url %>" class="underline hover:text-secondary"><%= help_label %></a>
+      </p>
+    <% end %>
+  </div>
+</div>
