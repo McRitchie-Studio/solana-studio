@@ -1,6 +1,7 @@
 require_relative "test_helper"
 require "json"
 require "tempfile"
+require "open3"
 
 # The browser guard's classifier, exercised in a real JS engine.
 #
@@ -35,8 +36,14 @@ class NetworkGuardJsTest < Minitest::Test
     Tempfile.create(["guard", ".js"]) do |f|
       f.write(harness)
       f.flush
-      out = IO.popen(["node", f.path], err: [:child, :out], &:read)
-      raise "node failed: #{out}" unless $?.success?
+      # SEPARATE STREAMS. The result below is JSON.parsed straight off stdout,
+      # so folding stderr in (`err: [:child, :out]`) would let ANY node chatter
+      # — an ExperimentalWarning, a deprecation notice, a stray console.error
+      # in the guard — arrive as a JSON parse error in a test about wallet
+      # error classification. The same merge in test/engine_test.rb's helper
+      # blocked a release; this one had not fired yet.
+      out, err, status = Open3.capture3("node", f.path)
+      raise "node failed: #{err}" unless status.success?
 
       JSON.parse(out.strip)
     end
@@ -50,6 +57,21 @@ class NetworkGuardJsTest < Minitest::Test
   end
 
   DEVNET_QA = { "solanaCluster" => "devnet", "appEnvironment" => "qa" }.freeze
+
+  # The harness's own contract, asserted before anything that depends on it.
+  # `run_js` parses the child's stdout as JSON, so stderr reaching stdout is a
+  # parse error rather than a readable failure. Restore the merged capture and
+  # this test raises JSON::ParserError on the "noise on stderr" line.
+  def test_the_js_harness_keeps_stderr_out_of_the_parsed_result
+    result = run_js(DEVNET_QA, <<~JS)
+      console.error("noise on stderr");
+      return SolanaStudio.network.context().cluster;
+    JS
+
+    assert_equal "devnet", result,
+                 "stdout must reach JSON.parse alone — node's stderr must never " \
+                 "become part of the parsed result"
+  end
 
   def test_context_reads_discrete_data_attributes
     ctx = run_js(DEVNET_QA, "return SolanaStudio.network.context();")
