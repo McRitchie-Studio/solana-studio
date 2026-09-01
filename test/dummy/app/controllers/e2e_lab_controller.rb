@@ -26,11 +26,27 @@ class E2eLabController < ActionController::Base
   LAB_CLUSTER = "devnet"
   LAB_ENVIRONMENT = "qa"
 
+  # Published to the layout so the lab declares its cluster on <body> the way a
+  # host does. The deep link reads document.body.dataset.solanaCluster and warns
+  # loudly when it is missing; a lab that let it fall back to the default would
+  # leave that plumbing untested and the console noisy.
+  helper_method :lab_cluster
+  def lab_cluster = LAB_CLUSTER
+
   def guard
     @network_json = Solana::Network.describe(LAB_CLUSTER, environment: LAB_ENVIRONMENT).to_json
   end
 
   def modal
+    @network_json = Solana::Network.describe(LAB_CLUSTER, environment: LAB_ENVIRONMENT).to_json
+  end
+
+  # The Phantom mobile deep link. Renders the gem's partial only when asked, so one
+  # page can serve BOTH states of the gate that depends on it — see the view.
+  #
+  # No ivar of its own: the deep link reads its cluster off the body's
+  # data-solana-cluster, which the LAYOUT publishes exactly as a host does.
+  def phantom_deeplink
     @network_json = Solana::Network.describe(LAB_CLUSTER, environment: LAB_ENVIRONMENT).to_json
   end
 end
