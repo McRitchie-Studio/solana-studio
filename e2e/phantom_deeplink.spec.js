@@ -86,7 +86,13 @@ async function stubTheFlow(page) {
         box: {
           keyPair: () => ({
             publicKey: new Uint8Array(32).fill(pub),
-            secretKey: new Uint8Array(64).fill(sec),
+            // 32, not 64. nacl.box is X25519, whose secret key is 32 bytes
+            // (nacl.box.secretKeyLength === 32); 64 is nacl.SIGN's shape, and
+            // real nacl.box.before REJECTS it with "bad secret key size". The
+            // stub asserts nothing about this buffer today, but a stub that
+            // lies about the shape of what it replaces is how a later spec
+            // gets written against bytes the real flow can never produce.
+            secretKey: new Uint8Array(32).fill(sec),
           }),
         },
       };
