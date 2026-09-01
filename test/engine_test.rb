@@ -50,11 +50,21 @@ class EngineTest < Minitest::Test
     CODE
 
     assert ok, "stream-separation probe failed: #{err}"
+
+    # STDOUT is asserted EXACTLY: this test writes every byte of it.
     assert_equal ["SolanaStudio::Engine"], out.lines.map(&:strip),
                  "stdout must carry the child's stdout ALONE — a warning on stderr " \
                  "must never reach an assertion that reads stdout"
-    assert_equal ["noise on stderr"], err.lines.map(&:strip),
-                 "stderr must still be captured and returned, so a child that dies says why"
+
+    # STDERR is asserted by PRESENCE, never equality — it is SHARED with the
+    # runtime. A child inheriting a BUNDLE_GEMFILE from another gem (what
+    # happens when bin/release-check is reached from the hub's already-bundled
+    # release sweep) reloads rubygems_ext over an initialized rubygems and
+    # prints 17 "already initialized constant Gem::Platform" lines here. An
+    # equality would encode "the environment is quiet" — the same false
+    # assumption, one stream over, that this file exists to remove.
+    assert_includes err.lines.map(&:strip), "noise on stderr",
+                    "stderr must still be captured and returned, so a child that dies says why"
   end
 
   def test_engine_is_absent_without_rails
