@@ -1,0 +1,37 @@
+<%# Lab page for the Phantom MOBILE deep link.
+
+    TWO STATES ON ONE PAGE, chosen by the deeplink query parameter, because the
+    property under test is a DIFFERENCE. The gem's wallet picker gates its mobile
+    Phantom row on a bare typeof startPhantomDeepLink test, so the entry point must
+    be ABSENT when the partial is not rendered and PRESENT when it is. Both states
+    ship byte-identical picker markup, so only a browser can tell them apart. A page
+    that could render one state could not observe that difference at all.
+
+    NOTHING HERE REIMPLEMENTS THE DEEP LINK. The browser program lives in the gem
+    partial solana_studio/phantom_deeplink and is rendered BY NAME below. A lab page
+    that hand-rolled any of it would grade itself, and the lane would report green
+    over code no browser ever touched. test/e2e_lane_contract_test.rb asserts that
+    render stays by name.
+
+    THE PICKER IS NOT MOUNTED HERE, stated rather than left as a silent gap. Its
+    canDeepLink gate reaches the answer through window.walletProvider.isMobile,
+    which turf-monster ships and this gem does not; stubbing it would mean stubbing
+    the very thing that decides, which is the lab grading itself again. That branch
+    is browser-covered where it actually runs, in turf-monster's e2e/auth_modal.spec.js
+    phone describe, which taps the row and decodes the payload. What is covered HERE
+    is the half that lives in this gem: the deep link program itself.
+
+    tweetnacl is deliberately NOT loaded. The gem partial solana_studio/deeplink_assets
+    fetches it from a CDN and this lane never reaches offsite. Defining the entry point
+    does not need nacl; only CALLING it does, so the spec that calls it stubs the two
+    members that flow touches and drives the real shipped program for everything else.
+%>
+<% render_deeplink = params[:deeplink] == "1" %>
+
+<%# The state marker, so a spec can prove it loaded the page it meant to rather
+    than asserting against whatever document happened to be on screen. %>
+<div data-test="deeplink-state" data-deeplink="<%= render_deeplink %>"></div>
+
+<% if render_deeplink %>
+  <%= render "solana_studio/phantom_deeplink" %>
+<% end %>

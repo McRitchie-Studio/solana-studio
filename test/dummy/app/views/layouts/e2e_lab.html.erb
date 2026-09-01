@@ -25,7 +25,7 @@
       looks perfectly fine in curl. turf-monster's layout carries the same bare
       `x-data` on <body> for the same reason. The lab is the host here, so the
       lab supplies it. %>
-  <body x-data class="bg-page text-body" data-solana-network="<%= @network_json %>">
+  <body x-data class="bg-page text-body" data-solana-network="<%= @network_json %>" data-solana-cluster="<%= lab_cluster %>">
     <%= yield %>
     <script defer src="/e2e/js/studio/alpine.js"></script>
   </body>
