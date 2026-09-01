@@ -1,0 +1,330 @@
+<%#
+  "Connect Wallet" picker — the reown-style wallet chooser, OWNED BY THE ENGINE.
+  Promoted out of style/modals/_wallet_connect (where only the living style guide
+  could render it) so the apps stop each keeping their own copy: before this the
+  same screen existed THREE times — turf-monster 226 lines, mcritchie-studio 107,
+  and the guide's 176 — sharing no code and drifting apart. The hub's copy still
+  pointed at app-served PNGs the engine's brand sprite replaced in 0.20.
+
+  Mount it inside the modal host's <template x-if="id==='wallet-connect'">, so
+  this MUST have a SINGLE ROOT — everything lives inside the outer <div>.
+
+  Props (set by whoever opens the modal, read off the store entry):
+    linkMode       — true when this is an account-LINKING flow (already logged in)
+    currentUserId  — bound into the SIWS message when linking
+    returnUrl      — where to go after a successful connect
+
+  Locals:
+    store       — Alpine store name backing the modal. Default "modals".
+    connect_fn  — name of the window function that connects AND verifies a
+                  wallet, called as window[connect_fn](name, opts) and expected
+                  to resolve { success: true, redirect } or { success: false,
+                  error }. Default "solanaConnectAndVerify".
+    title       — card heading. Default "Connect Wallet".
+    extra_data  — EXTRA x-data members for this component, as a JS fragment with
+                  NO surrounding braces, merged after the built-ins. This is how
+                  an app adds its own state (and the hooks below) without forking
+                  the picker. Default "".
+
+                  SHAPED LIKE style/_modal_specimen's card_data but NOT handled
+                  the same way, and the difference is deliberate. That file marks
+                  open_expr and glow_when html_safe and leaves card_data escaped
+                  (:42-44), so its fragment reaches the attribute as entities.
+                  Both work — a browser decodes entities inside an attribute —
+                  but only one is readable in View Source, and a reader comparing
+                  the two seams deserves to be told they diverge rather than left
+                  to assume a typo. If they are ever reconciled, reconcile them
+                  in one pass; do not quietly copy this decision back.
+    slot        — OPTIONAL partial path rendered between the heading and the
+                  wallet rows: the place for an app's legal-age attestation or
+                  any other pre-connect consent. It renders INSIDE this
+                  component's root, so it can bind straight to the members
+                  extra_data contributes.
+    slot_locals — locals for that partial. Default {}.
+
+  A NAMED LOCAL AND NOT A BLOCK, and this is load-bearing. `block_given?` is
+  ALWAYS TRUE inside a compiled Rails partial — PartialRenderer hands the
+  template a block either way — so a bare `yield if block_given?` falls through
+  to view_flow[:layout] and prints THE WHOLE CAPTURED PAGE BODY inside the card.
+  Both consuming apps mount the modal host in application.html.erb, which is
+  exactly when that flow is populated, and the hub's planned adoption is a bare
+  render with no block. Caught in review of this partial's own first version.
+  blocks/_card_header documents the same hazard and blocks/_entry_confirmed made
+  the same choice (above_seeds) for the same reason.
+
+  HOOKS — optional methods an app defines in extra_data. Each is called only if
+  it exists, so an app that needs none passes no extra_data at all. They are
+  METHODS rather than string-expression locals on purpose: an Alpine expression
+  threaded through an ERB local has to survive a double-quoted HTML attribute,
+  and an escaped handler there renders working-looking HTML that passes every
+  markup assertion. Methods live inside the x-data where they are just code.
+
+    onInit()             extra init, run BEFORE the first wallet refresh
+    canPick()            return falsy to ABORT a pick or a deep link (a consent
+                         gate); absent means always allowed
+    verifyArgs()         object merged into the connect options (extra fields
+                         the app's verify endpoint needs)
+    onConnected(result)  what to do on success; DEFAULT navigates to
+                         props.returnUrl || result.redirect || '/'. Override it
+                         for a demo or an in-page continuation — and note the
+                         override OWNS the reset: pick() leaves `connecting` and
+                         `picking` set, because the default navigates away and
+                         never comes back. An override that stays on the page
+                         must clear both or the rows stay disabled.
+    onDeepLink()         REPLACES the Phantom deep-link action. Use it to stash
+                         state that must survive the round trip out of the
+                         browser, or to do something else entirely. The default
+                         calls window.startPhantomDeepLink(linkMode, userId).
+    onBack()             the Back button; DEFAULT closes the modal
+%>
+<%
+  store      = local_assigns.fetch(:store, "modals")
+  connect_fn = local_assigns.fetch(:connect_fn, "solanaConnectAndVerify")
+  title      = local_assigns.fetch(:title, "Connect Wallet")
+  # html_safe, and deliberately: extra_data is a DEVELOPER-AUTHORED JavaScript
+  # fragment, never user input. Without it ActionView escapes the fragment on
+  # its way into the x-data attribute and every single quote becomes &#39; —
+  # which still PARSES (the browser decodes entities in an attribute), so the
+  # page works and only the source reads wrong. That is exactly the failure a
+  # markup assertion cannot see. On style/_modal_specimen: see the header. It
+  # marks open_expr and glow_when safe but leaves card_data ESCAPED, so the two
+  # seams DIVERGE — deliberately, and not because one of them has a typo.
+  slot        = local_assigns[:slot].presence
+  slot_locals = local_assigns.fetch(:slot_locals, {})
+  extra_data  = local_assigns.fetch(:extra_data, "").to_s.strip
+  # Built here and marked safe ONCE, rather than interpolated at the call site.
+  # Two traps sit on this line, both of which render a working-looking page:
+  #   1. Marking extra_data safe is NOT enough. Interpolating a SafeBuffer into
+  #      a plain string literal yields a PLAIN String, the safety is lost, and
+  #      every quote in the fragment escapes to an entity. It still PARSES (a
+  #      browser decodes entities in an attribute), so only the source reads
+  #      wrong. Concatenate, then mark the result.
+  #   2. The fragment is developer-authored JavaScript, never user input. That
+  #      is what makes html_safe correct here rather than a hole.
+  extra_fragment = extra_data.present? ? (",\n       " + extra_data).html_safe : "".html_safe
+%>
+<div x-data="{
+       get props() { var c = $store.<%= store %>.current(); return (c && c.props) || {}; },
+       wallets: [],
+       installs: [
+         { name: 'Phantom',  url: 'https://phantom.app/download' },
+         { name: 'Solflare', url: 'https://solflare.com/download' },
+         { name: 'Backpack', url: 'https://backpack.app/downloads' }
+       ],
+       connecting: false,
+       picking: '',
+       error: '',
+       init() {
+         if (typeof this.onInit === 'function') this.onInit();
+         this.refresh();
+         // Wallet Standard registration can land a tick after the module
+         // loads — re-read once so a just-registered wallet still appears.
+         var self = this;
+         setTimeout(function() { if (!self.connecting) self.refresh(); }, 300);
+       },
+       refresh() {
+         this.wallets = (window.walletProvider && window.walletProvider.available && window.walletProvider.available()) || [];
+       },
+       get isMobile() { return !!(window.walletProvider && window.walletProvider.isMobile && window.walletProvider.isMobile()); },
+       hasWallet(name) {
+         var n = ('' + name).toLowerCase();
+         return (this.wallets || []).some(function(w) { return w.name && w.name.toLowerCase() === n; });
+       },
+       allowed() {
+         return typeof this.canPick === 'function' ? !!this.canPick() : true;
+       },
+       // Resolve a known install-brand name to its sprite symbol suffix. The
+       // three install rows are always known brands, so this always resolves;
+       // an unknown name returns null and the use paints nothing (detected rows
+       // never use it — they keep the wallet's own Wallet-Standard icon).
+       brandIcon(name) {
+         var n = ('' + name).toLowerCase();
+         return ['phantom', 'solflare', 'backpack'].indexOf(n) !== -1 ? n : null;
+       },
+       // Is there anywhere for a mobile Phantom row to GO? A consumer that does
+       // not render solana_studio/phantom_deeplink has no startPhantomDeepLink,
+       // and every branch below turns on this answer.
+       //
+       // WHY IT IS CHECKED AT ALL: without it, adopting this picker replaced an
+       // app's dead-end install row with a dead BUTTON — the install row
+       // suppressed, the deep-link row painted, and its tap a no-op. Found
+       // before the hub adopted, which had no mobile wallet path whatsoever.
+       // An absent capability must not default to the permissive branch.
+       get canDeepLink() {
+         return typeof startPhantomDeepLink === 'function';
+       },
+       // A phone has no extension to install, and Phantom's own row on mobile
+       // is the deep link below — so drop Phantom here rather than paint a
+       // SECOND Phantom row pointing at a desktop download page the user
+       // cannot act on. ONLY when a deep link can replace it: with no deep
+       // link the install row is the only Phantom path there is, dead end on
+       // iOS or not, and removing it leaves the user nothing. Solflare and
+       // Backpack keep their install rows either way — there is no deep link
+       // for them, so the download page is still their only path.
+       get missingInstalls() {
+         var self = this;
+         return this.installs.filter(function(i) {
+           if (self.hasWallet(i.name)) return false;
+           if (self.isMobile && self.canDeepLink && i.name === 'Phantom') return false;
+           return true;
+         });
+       },
+       // ONE Phantom row in every state: injected (Phantom's in-app browser)
+       // means the detected row above already offers a working connect, so a
+       // deep link would only offer to leave Phantom to open Phantom.
+       get showPhantomDeepLink() {
+         return this.isMobile && !this.hasWallet('Phantom') && this.canDeepLink;
+       },
+       async pick(name) {
+         if (this.connecting) return;
+         if (!this.allowed()) return;
+         this.connecting = true; this.picking = name; this.error = '';
+         try {
+           var opts = { linkMode: this.props.linkMode, currentUserId: this.props.currentUserId };
+           if (typeof this.verifyArgs === 'function') Object.assign(opts, this.verifyArgs() || {});
+           var result = await window.<%= connect_fn %>(name, opts);
+           if (result && result.success) {
+             if (typeof window.handleSolanaVerifySuccess === 'function') window.handleSolanaVerifySuccess(result);
+             if (typeof this.onConnected === 'function') {
+               this.onConnected(result);
+             } else {
+               window.location.href = this.props.returnUrl || result.redirect || '/';
+             }
+           } else {
+             this.error = (result && result.error) || 'Verification failed.';
+             this.connecting = false; this.picking = '';
+           }
+         } catch (e) {
+           var msg = (e && e.code === 4001) ? 'Signature rejected' : ((e && e.message) || 'Connection failed');
+           if (typeof parseSolanaError === 'function') msg = parseSolanaError(msg);
+           this.error = msg; this.connecting = false; this.picking = '';
+         }
+       },
+       deepLink() {
+         // Same connecting guard as pick(). Without it a tap during an in-flight
+         // SIWS verify fires the deep link and walks the user out of the browser
+         // mid-signature. The app copies this was promoted from had the same
+         // hole; sharing the partial is the moment to close it for everyone.
+         if (this.connecting) return;
+         if (!this.allowed()) return;
+         if (typeof this.onDeepLink === 'function') { this.onDeepLink(); return; }
+         if (typeof startPhantomDeepLink === 'function') {
+           startPhantomDeepLink(this.props.linkMode || false, (this.props.linkMode && this.props.currentUserId) || null);
+         }
+       },
+       back() {
+         if (this.connecting) return;
+         if (typeof this.onBack === 'function') { this.onBack(); return; }
+         // Alpine.store(), not the $store magic: this runs as a METHOD BODY, and
+         // both consuming apps reach the store this way from inside one. The
+         // $store form stays where it is proven — the props getter and the
+         // Alpine attribute expressions in the markup below.
+         Alpine.store('<%= store %>').close();
+       }<%= extra_fragment %>
+     }"
+     class="relative">
+
+  <%# Wallet brand-icon sprite. Inline SVG symbol marks for the known install
+      brands, referenced by the rows below via use href="#se-wallet-…". MUST
+      live inside this picker's single root so the host's template x-if clones
+      it with the card — a sibling of the root is dropped, painting empty
+      icons. Replaces the per-app wallet PNGs. %>
+  <%= render "studio/modals/blocks/wallet_brand_sprite" %>
+
+  <div class="relative mb-4">
+    <h3 class="text-heading font-bold text-lg text-center pt-1"><%= title %></h3>
+    <button @click="$store.<%= store %>.close()"
+            class="absolute top-0 right-0 -mr-1 text-secondary hover:text-heading text-xl leading-none"
+            aria-label="Close">&times;</button>
+  </div>
+
+  <%# App slot — consent, legal copy, anything that must be answered before a
+      wallet is picked. Rendered from a NAMED LOCAL, never a block: see the
+      header. The app's own x-data members (and canPick) arrive through
+      extra_data, so the slot partial can bind straight to them. %>
+  <% if slot %>
+    <%= render slot, **slot_locals %>
+  <% end %>
+
+  <div class="space-y-2">
+    <%# Detected wallets — INSTALLED, click to connect %>
+    <template x-for="w in wallets" :key="w.name">
+      <button type="button" @click="pick(w.name)" :disabled="connecting"
+              class="w-full flex items-center gap-3 p-3 rounded-xl bg-surface-alt border border-strong hover:bg-surface transition text-left disabled:opacity-60 disabled:cursor-wait">
+        <%# Brand mark, three ways, and NONE of them an app-served file. A wallet
+            that registered through Wallet Standard supplies its own icon, and
+            that is the most accurate mark available, so it wins. Otherwise the
+            engine sprite by brand name. Otherwise a letter tile. The markup
+            promoted from the app fell back to /solana-mark.svg, a per-app asset
+            — exactly what blocks/_wallet_brand_sprite exists to end, and a 404
+            in any app that had not copied it. %>
+        <template x-if="w.icon">
+          <img :src="w.icon" alt="" class="w-9 h-9 rounded-lg shrink-0">
+        </template>
+        <template x-if="!w.icon && brandIcon(w.name)">
+          <span class="w-9 h-9 rounded-lg overflow-hidden flex items-center justify-center shrink-0">
+            <svg class="w-9 h-9 shrink-0" aria-hidden="true"><use :href="'#se-wallet-' + brandIcon(w.name)"></use></svg>
+          </span>
+        </template>
+        <template x-if="!w.icon && !brandIcon(w.name)">
+          <span class="w-9 h-9 rounded-lg bg-inset flex items-center justify-center text-sm font-bold text-heading shrink-0" x-text="w.name.slice(0,1)"></span>
+        </template>
+        <span class="font-semibold text-heading" x-text="w.name"></span>
+        <span class="ml-auto flex items-center gap-2">
+          <span x-show="picking === w.name" class="inline-flex items-center gap-1.5 text-xs text-secondary"><span class="spinner" aria-hidden="true"></span>Connecting&hellip;</span>
+          <span x-show="picking !== w.name" class="badge border-primary text-primary">Installed</span>
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4 text-muted">
+            <path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+          </svg>
+        </span>
+      </button>
+    </template>
+
+    <%# Mobile Phantom — the deep link IS the Phantom row here, so it sits in
+        Phantom's usual first position wearing the same brand icon and chevron
+        as the install rows, not as a second Phantom entry at the bottom of the
+        list. Phantom's universal link covers both states on its own: app
+        installed opens it, app absent falls through to Phantom's install page. %>
+    <button x-show="showPhantomDeepLink" x-cloak type="button" @click="deepLink()"
+            class="w-full flex items-center gap-3 p-3 rounded-xl bg-surface-alt border border-strong hover:bg-surface transition text-left">
+      <svg class="w-9 h-9 shrink-0" aria-hidden="true"><use href="#se-wallet-phantom"></use></svg>
+      <span class="font-semibold text-heading">Phantom</span>
+      <span class="ml-auto flex items-center gap-2">
+        <span class="text-xs text-muted uppercase tracking-wide">Open app</span>
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4 text-muted">
+          <path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+        </svg>
+      </span>
+    </button>
+
+    <%# Featured wallets that aren't installed — open the install page %>
+    <template x-for="i in missingInstalls" :key="i.name">
+      <a :href="i.url" target="_blank" rel="noopener noreferrer"
+         class="w-full flex items-center gap-3 p-3 rounded-xl bg-surface-alt border border-strong hover:bg-surface transition no-underline">
+        <svg class="w-9 h-9 shrink-0" aria-hidden="true"><use :href="'#se-wallet-' + brandIcon(i.name)"></use></svg>
+        <span class="font-semibold text-heading" x-text="i.name"></span>
+        <span class="ml-auto flex items-center gap-2">
+          <span class="text-xs text-muted uppercase tracking-wide">Install</span>
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4 text-muted">
+            <path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+          </svg>
+        </span>
+      </a>
+    </template>
+  </div>
+
+  <%# role="alert" — the engine requires every rendered error paragraph to carry
+      a live region (test/integration/modal_error_announcement_render_test.rb).
+      The app markup this was promoted from had none, so a connect failure was
+      shown and never ANNOUNCED. Adopting the primitive is what surfaced it: the
+      apps were never subject to this test. Same defect, same fix, as the
+      attestation error in studio/modals/shared/_age_attestation. %>
+  <template x-if="error">
+    <p role="alert" class="text-red-400 text-sm mt-3 text-center" x-text="error"></p>
+  </template>
+
+  <button type="button" @click="back()" :disabled="connecting"
+          class="mt-4 w-full text-center text-sm text-secondary hover:text-heading disabled:opacity-50">
+    &larr; Back
+  </button>
+</div>

@@ -1,0 +1,37 @@
+<%#
+  tweetnacl, for the Phantom mobile deep link. Both halves of that flow need
+  window.nacl: the deep link generates an x25519 keypair so Phantom can encrypt
+  its reply, and the callback opens that box with the stashed secret.
+
+  IDEMPOTENT ON PURPOSE. turf-monster already loads tweetnacl from its own
+  layout, so this must not load a second copy there; the guard means a consumer
+  that already supplies nacl keeps its own and one that does not (the hub, which
+  had no mobile wallet path at all) gets it here.
+
+  Pinned to an exact version rather than a range: this is signing-path crypto,
+  and a range lets a CDN swap it under a running app. The same reasoning is
+  written out beside turf-monster's web3.js pin.
+
+  Render before solana_studio/phantom_deeplink and in the callback view.
+%>
+<script>
+  // NOT document.write. Under turbo-rails a Drive visit re-executes body scripts
+  // at readyState === 'complete', where document.write implicitly calls
+  // document.open() and BLANKS THE PAGE — on exactly the consumer this guard
+  // exists for. Append a real element instead; it is also non-blocking.
+  (function () {
+    if (typeof window.nacl !== 'undefined') return;
+    if (document.querySelector('script[data-studio-nacl]')) return;
+    var s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl-fast.min.js';
+    // Derived with `openssl dgst -sha384 -binary | openssl base64 -A` against the
+    // fetched file, and cross-checked against the value turf-monster already pins
+    // for this exact URL. NEVER hand-write an SRI: a plausible-looking wrong one
+    // makes the browser refuse the script and nacl silently absent, which fails
+    // every mobile sign-in before any other code runs.
+    s.integrity = 'sha384-05+sicyRJQ56XpL4U9HJ8YbtSzFDvAg7apPKOGV6A0JsAJKFM68jp5oLnUjG5mEp';
+    s.crossOrigin = 'anonymous';
+    s.setAttribute('data-studio-nacl', '');
+    document.head.appendChild(s);
+  })();
+</script>
