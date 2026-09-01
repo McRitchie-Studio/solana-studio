@@ -280,6 +280,33 @@ deliberately does the latter.
 
 See [RUNBOOK.md](./RUNBOOK.md) for troubleshooting and local test commands.
 
+### 🧊 The durable-nonce primitives have two consumers, and one of them is on ice
+
+`Solana::SystemProgram` and `Solana::NonceAccount` landed together in **v0.4.6
+(2026-06-02, `11ec512`)** for **two** consumers at once, and the commit says so:
+*"the reusable core for the signing console's two-browser flow and for making
+turf's operator tx flows expiry-immune."*
+
+**The first of those went on ice on 2026-08-31.** McRitchie Studio's admin
+signing console — N wallets signing in separate browsers, anchored on a durable
+nonce so a half-signed transaction does not expire between signers — is **frozen
+in place: still working, not removed, not deprecated**, and not expected to drive
+any further work in this gem. Its full note (why it was frozen, and the one
+question that would revive it) lives in the hub, at `docs/SIGNING_CONSOLE_V2.md`.
+
+**Do not read that as permission to drop these two files.** The second consumer
+is the one in production:
+
+| Primitive | Live use |
+|---|---|
+| `Solana::SystemProgram.advance_nonce_account` | turf-monster prepends it as **instruction #0** of a durable-nonce vault cosign transaction (`app/services/solana/vault.rb`). Its cosign validator also **allow-lists exactly this one System instruction** — a nonce-anchored entry with any other System instruction is rejected. |
+| `Solana::NonceAccount.parse` | turf-monster reads the on-chain nonce account in the same path. |
+
+So the frozen consumer is the *quieter* one, never the only one. Both primitives
+are byte-match tested in `test/system_program_test.rb`, and a change to either
+still lands on turf-monster's money path — treat them as `onchain`, not as dead
+code left over from a shelved tool.
+
 ### The browser lane
 
 The Ruby suite cannot see two things this gem ships: whether
