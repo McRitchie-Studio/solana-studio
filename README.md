@@ -177,6 +177,44 @@ attributes, so a host can adopt it before changing its layout.
 Requires studio-engine's modal host (`Alpine.store('modals')`) and its shared
 modal blocks. The JS is `solana_studio/network_guard.js` on the asset path.
 
+### Wallet sign-in button (the credential slot)
+
+studio-engine owns the sign-in modal, because every app in the ecosystem signs
+people in and most of them are web2. This gem owns the **wallet button** inside
+it, because only a web3 app has wallets.
+
+There is **nothing to wire up.** The engine's auth modal looks for a partial at
+one fixed path and renders whatever it finds:
+
+    solana_studio/auth/_wallet_credential
+
+Bundling this gem puts that partial on the host's view path, so the button
+appears. An app that does not bundle it finds nothing and renders nothing — no
+wallet markup ships to a newsletter app, and no `render` call has to be deleted
+to keep it out.
+
+The engine asks two questions and needs both answered yes:
+
+| Question | Answered by | Where |
+|---|---|---|
+| Does this app *want* wallet sign-in? | `Studio.auth_method?(:wallet)` and `Studio.feature?(:web3)` | the host's `config/initializers/studio.rb` |
+| Is there a layer that *implements* it? | this partial resolving on the view path | bundling this gem |
+
+Both matter. McRitchie Studio bundles this gem for the Ruby signing primitives
+while shipping web3 **off**, so the partial is present and the button is
+correctly absent. And an app that declares `:wallet` but forgets the gem gets no
+button rather than a missing-partial error in front of someone signing in.
+
+The partial renders inside the modal's own Alpine scope and borrows three
+members from it — `methodOn('wallet')` for visibility, `attested()` for the
+legal-age gate, and `props.submitting` for the disabled state. It takes one
+required local, `modal_store`, which the engine passes.
+
+Why a contributed button and not a second auth modal: Turf Monster wants Google
+plus magic-link plus wallet, McRitchie Studio wants Google plus magic-link. A
+forked modal would put a surface both apps sign in through into two files, which
+is how the wallet picker reached three copies before it was promoted.
+
 ## Dependencies
 
 - `ed25519` (~> 1.3) — Ed25519 signing

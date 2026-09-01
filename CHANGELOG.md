@@ -2,6 +2,15 @@
 
 The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+- **The wallet sign-in button, contributed into studio-engine's auth modal** (`app/views/solana_studio/auth/_wallet_credential.html.erb`). Part of the base/bolt-on split: studio-engine plus McRitchie Studio is the template every app is built from, web2 and web3 alike, and this gem plus Turf Monster is the web3 bolt-on. Sign-in is a base concern so the modal stays in the engine; **wallets are not**, so the button moved here. The engine renders whatever resolves at `solana_studio/auth/wallet_credential` and nothing when the path is empty, so bundling this gem IS the registration and a web2 app carries no wallet markup at all. Deliberately NOT solved by giving this gem its own auth modal: that would fork a surface both apps sign in through, which is how the wallet picker reached three drifting copies before it was promoted. The engine keeps both halves of the existing gate (`Studio.auth_method?(:wallet)` and `Studio.feature?(:web3)`) so the hub — which bundles this gem for its signing primitives with web3 off — still renders a web2 sign-in modal.
+
+### Tests
+- `test/auth_credential_test.rb` (7): the partial sits at the path the engine resolves, the click handler consults the modal's age gate, visibility binds to the shared `methodOn('wallet')` toggle, `modal_store` is required with no default, the swap carries the picker's `backTo`/`ageAttested` contract, the brand gradient id is namespaced against collisions, and the mark stays inline rather than becoming a sprockets asset request. Every assertion reads ERB-comment-stripped source, because this file documents its own contract in prose and a bare grep would match the paragraph instead of the code — proven by mutating the gate into a comment and watching it go red.
+- `test/gemspec_test.rb` and `.github/workflows/gem-ci.yml` name the new partial alongside the modal, so a `spec.files` glob that stopped matching it fails at build rather than in a consumer.
+
 ## Unreleased — targets v0.5.0 (minor)
 
 Ships the gem's first Rails half, and its first CI. The version number is
