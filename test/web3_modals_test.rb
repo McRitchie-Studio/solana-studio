@@ -1,4 +1,5 @@
 require_relative "test_helper"
+require "open3"
 
 # The web3 modal surface, promoted out of studio-engine.
 #
@@ -40,9 +41,14 @@ class Web3ModalsTest < Minitest::Test
     "solana_studio/deeplink_assets"       => "app/views/solana_studio/_deeplink_assets.html.erb"
   }.freeze
 
+  # Runs `code` in a clean child and returns [stdout, ok, stderr].
+  #
+  # THE STREAMS STAY SEPARATE, and every assertion here reads STDOUT ALONE.
+  # Stderr is still returned, deliberately, so a child that dies reports why.
+  # The regression that made this necessary is pinned in the first test below.
   def ruby(code)
-    out = IO.popen([RbConfig.ruby, "-I#{LIB}", "-e", code], err: [:child, :out], &:read)
-    [out.strip, $?.success?]
+    out, err, status = Open3.capture3(RbConfig.ruby, "-I#{LIB}", "-e", code)
+    [out.strip, status.success?, err.strip]
   end
 
   def source_of(virtual_path)
@@ -70,6 +76,50 @@ class Web3ModalsTest < Minitest::Test
       .gsub(%r{^[ \t]*//.*$}, "")  # JavaScript line comments, anchored to the start of a line
   end
 
+  # THE REGRESSION, pinned at the HELPER rather than at the case that tripped
+  # over it. Every assertion here reads STDOUT ALONE — and the lookup case below
+  # COUNTS ITS LINES — so a helper that folds stderr in turns whatever the
+  # ENVIRONMENT says into this file's own answer.
+  #
+  # That is not hypothetical. This helper folded (`err: [:child, :out]`) until
+  # now, and under a foreign BUNDLE_GEMFILE — what the child inherits when
+  # bin/release-check is reached from the hub's already-bundled release sweep —
+  # rubygems printed 8 "already initialized constant Gem::Platform" warnings
+  # across 16 lines, the identifier count came back 20 instead of 4, and a
+  # release aborted at the gem-publish gate on a tree whose product code was
+  # correct. A bare desk run emits no such warnings and read green, so the desk
+  # and the release gate disagreed about one identical tree. test/engine_test.rb
+  # was fixed for precisely this defect the night before; this is the same fix.
+  #
+  # NOT `RUBYOPT=-W0`, which silences the warnings at the source: `Kernel#warn`
+  # is a no-op under it, so it also silences the probe below and breaks this
+  # test. The CAPTURE is what had to change.
+  #
+  # The child writes to BOTH streams on purpose. Restore the merged form and the
+  # stdout assertion fails, in every environment, with no bundler needed to see it.
+  def test_the_subprocess_helper_keeps_stderr_out_of_stdout
+    out, ok, err = ruby(<<~CODE)
+      warn "noise on stderr"
+      puts "solana_studio/modals/wallet_connect"
+    CODE
+
+    assert ok, "stream-separation probe failed: #{err}"
+
+    # STDOUT asserted EXACTLY: this test writes every byte of it. The line COUNT
+    # is the precise property the virtual-path case depends on.
+    assert_equal ["solana_studio/modals/wallet_connect"], out.lines.map(&:strip),
+                 "stdout must carry the child's stdout ALONE — a warning on stderr " \
+                 "must never reach an assertion that counts stdout lines"
+
+    # STDERR asserted by PRESENCE, never equality — it is SHARED with the
+    # runtime. Under that same foreign BUNDLE_GEMFILE the rubygems warnings land
+    # HERE, so an equality would encode "the environment is quiet": the identical
+    # false assumption, one stream over, that this fix exists to remove. That
+    # exact mistake needed a follow-up zap after the engine_test fix landed.
+    assert_includes err.lines.map(&:strip), "noise on stderr",
+                    "stderr must still be captured and returned, so a child that dies says why"
+  end
+
   def test_there_are_moved_partials_to_check
     # Guards the guard: an empty or renamed map would make every assertion below
     # vacuously true, which is how a move "passes" while shipping nothing.
@@ -87,7 +137,7 @@ class Web3ModalsTest < Minitest::Test
     # virtual path finds a template. A file present but unreachable — wrong
     # directory, wrong underscore, engine not contributing app/views — fails here
     # rather than in front of a user.
-    out, ok = ruby(<<~CODE)
+    out, ok, err = ruby(<<~CODE)
       require "rails"
       require "action_view"
       require "solana_studio"
@@ -102,7 +152,7 @@ class Web3ModalsTest < Minitest::Test
       end
     CODE
 
-    assert ok, "virtual-path lookup failed: #{out}"
+    assert ok, "virtual-path lookup failed: #{err}"
 
     identifiers = out.lines.map(&:strip)
     assert_equal MOVED.size, identifiers.length
