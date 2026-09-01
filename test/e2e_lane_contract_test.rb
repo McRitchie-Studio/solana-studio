@@ -106,6 +106,34 @@ class E2eLaneContractTest < Minitest::Test
                  "the modal page must render the ENGINE's real host, not a stand-in")
     assert_match(/render\s+["']solana_studio\/modals\/network_mismatch["']/, modal_page,
                  "the modal page must render the GEM's real partial by name")
+
+    # The deep link's lab page. Its program is an INLINED base58 encoder on the
+    # signing path, so a hand-rolled copy here would be the worst version of this
+    # failure: the specs would decode a payload the gem never produced and report
+    # green over a shipped encoder no browser touched.
+    deeplink_page = File.read(File.join(ROOT, "test/dummy/app/views/e2e_lab/phantom_deeplink.html.erb"))
+
+    assert_match(/render\s+["']solana_studio\/phantom_deeplink["']/, deeplink_page,
+                 "the deep link page must render the GEM's real partial by name")
+    refute_match(/startPhantomDeepLink\s*=/, deeplink_page,
+                 "the lab page defines the entry point itself — the specs would then be grading the lab, " \
+                 "and every one of them would still pass")
+  end
+
+  # BOTH STATES, on one page. The deep link's absence is half the property under
+  # test: the picker gates its mobile Phantom row on the entry point existing, so a
+  # spec can only observe that as a DIFFERENCE. A lab page that lost its conditional
+  # would render the partial unconditionally, the negative spec would fail loudly —
+  # but a page that lost the RENDER instead would leave the negative spec passing
+  # while the positive one broke, which is why the render is asserted above too.
+  def test_the_deep_link_lab_page_can_serve_both_states
+    page = File.read(File.join(ROOT, "test/dummy/app/views/e2e_lab/phantom_deeplink.html.erb"))
+
+    assert_match(/params\[:deeplink\]/, page,
+                 "the deep link page must choose its state from the request, so one page serves both")
+    assert_match(/data-deeplink=/, page,
+                 "the page must publish which state it rendered — without it a spec cannot prove it " \
+                 "loaded the page it meant to rather than asserting against some other document")
   end
 
   def test_the_lab_serves_the_shipped_javascript_not_a_copy

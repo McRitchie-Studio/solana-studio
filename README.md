@@ -309,10 +309,18 @@ code left over from a shelved tool.
 
 ### The browser lane
 
-The Ruby suite cannot see two things this gem ships: whether
-`network_guard.js` actually **runs** in a browser, and whether
+The Ruby suite cannot see three things this gem ships: whether
+`network_guard.js` actually **runs** in a browser, whether
 `_network_mismatch.html.erb` **renders** (rendering it needs studio-engine's modal
-blocks and a view context, so `test/views_test.rb` only proves it compiles).
+blocks and a view context, so `test/views_test.rb` only proves it compiles), and
+whether the base58 encoder inlined in `_phantom_deeplink.html.erb` produces the
+**right bytes**. That last one is signing-path code: the deep link encodes the
+payload a user signs inside Phantom, so an encoder that mis-encodes yields a
+signature over the wrong bytes. The failure is invisible to a String assertion —
+the source is identical either way — and lands when someone taps Connect on a
+phone. `e2e/phantom_deeplink.spec.js` decodes the emitted payload with its own
+independent implementation and compares bytes, rather than checking the parameter
+merely looks like base58.
 
 ```bash
 npm ci && npx playwright install chromium
