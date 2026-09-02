@@ -16,6 +16,14 @@ group :development, :test do
   # runtime dependency would drag a Rails engine into every plain-Ruby consumer
   # of this gem — the exact coupling lib/solana_studio/engine.rb exists to avoid.
   gem "studio-engine", "~> 0.57"
+  # The RENDER tier (test/views/) parses the card it just rendered. DECLARED
+  # rather than leaned on as actionview's transitive dependency, because the
+  # suite requires it directly and a transitive it does not name can vanish
+  # under an unrelated dependency bump. A hand-rolled tag scanner is not the
+  # cheaper option here — it is the known-WRONG one: the version this replaced
+  # read the wallet row's void <img> as an open element and answered "one root"
+  # for any number of roots.
+  gem "nokogiri", "~> 1.19"
   gem "minitest", "~> 5.0"
   gem "rake"
 end

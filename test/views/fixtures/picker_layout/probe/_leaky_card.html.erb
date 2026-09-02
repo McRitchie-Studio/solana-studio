@@ -1,0 +1,13 @@
+<%# THE DEFECT, REPRODUCED ON PURPOSE — the control for the leak regression.
+    This is the shape the picker shipped with once: a slot taken as a BLOCK and
+    guarded with block_given?. Inside a compiled Rails partial block_given? is
+    ALWAYS true, because PartialRenderer hands the template a block either way,
+    so with no caller block the yield falls through to view_flow and prints the
+    entire captured page body inside the card.
+
+    It exists so the regression test can prove its probe still BITES. Asserting
+    only that the shipped card is clean is satisfied by a harness that renders
+    nothing, populates no flow, or looks in the wrong element — every one of
+    which passes forever while the guard is dead. This card makes the harness
+    demonstrate a leak it can actually see. %>
+<div class="leaky-root"><% if block_given? %><%= yield %><% end %></div>

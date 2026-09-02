@@ -51,7 +51,10 @@ failed=0
 total_runs=0
 
 while IFS= read -r file; do
-  printf '%-44s' "$file"
+  # Wide enough for the longest path this glob reaches — test/views/ nests one
+  # level deeper than the rest, and a name that overruns the column runs
+  # straight into its own verdict.
+  printf '%-48s' "$file"
   # Per-file so a zero-run or skipped file is attributable. Output is captured
   # and only echoed on trouble, keeping a green run readable.
   if ! output="$(bundle exec ruby -Itest "$file" 2>&1)"; then
