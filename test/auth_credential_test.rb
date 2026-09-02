@@ -9,12 +9,20 @@ require_relative "test_helper"
 # renders whatever it finds; being installed is the entire registration.
 #
 # WHAT THIS SIDE CAN HONESTLY CLAIM. This suite is Rails-free by design (see
-# test/engine_test.rb), so it cannot render — rendering needs the engine's view
-# context, and those assertions live in studio-engine's
-# test/views/auth_credential_slot_test.rb. What it CAN pin is the half of the
-# contract that is visible in the source: that the file sits where the engine
-# looks, and that the three scope members it borrows from the modal are actually
-# used. Compilation is covered for free by ViewsTest's glob.
+# test/engine_test.rb), so it cannot render. What it CAN pin is the half of the
+# contract visible in the source: that the file sits where the engine looks, and
+# that the scope members it borrows from the modal are actually used.
+# Compilation is covered for free by ViewsTest's glob.
+#
+# THE RENDER TIER IS test/views/auth_wallet_credential_test.rb, IN THIS REPO.
+# This comment used to send readers to studio-engine's
+# test/views/auth_credential_slot_test.rb, which does not exist — the engine
+# keeps only its own style-guide specimens
+# (test/views/style_web3_specimens_test.rb) and never asserted this partial's
+# locals. The distinction matters more since the click grew a seam: the default
+# handler is assembled by ERB and appears NOWHERE in this file's source, so
+# everything below is now a claim about the TEMPLATE, and the claims about the
+# OUTPUT live next door.
 class AuthCredentialTest < Minitest::Test
   PATH = File.expand_path("../app/views/solana_studio/auth/_wallet_credential.html.erb", __dir__)
 
@@ -44,8 +52,42 @@ class AuthCredentialTest < Minitest::Test
   def test_visibility_follows_the_modal_toggle
     # methodOn('wallet') is the engine's shared per-method switch, which the
     # style guide's specimen toggles drive. Binding to anything else would leave
-    # a button the guide cannot turn off.
-    assert_includes source, %(x-show="methodOn('wallet')")
+    # a button the guide cannot turn off. Matched as a SUBSTRING of the gate now
+    # that the call sits behind a typeof test — the concern is that the shared
+    # toggle is still what gets consulted, not the exact spelling around it.
+    assert_match(/x-show="[^"]*methodOn\('wallet'\)/, source)
+  end
+
+  def test_the_gate_tolerates_a_host_that_never_defined_the_toggle
+    # A BARE methodOn('wallet') THROWS in a host without the member, Alpine
+    # grades the throw as FALSY, and the button SILENTLY NEVER RENDERS — no
+    # error a user can see, nothing in the page to debug. Measured in Chromium
+    # against the vendored Alpine 3.16.1; it is what blocked Turf Monster's
+    # adoption of this partial.
+    #
+    # Duplicated from the render tier ON PURPOSE. This suite is Rails-free, so
+    # it is the copy that still runs when a view context cannot boot at all.
+    assert_includes source,
+                    %(x-show="typeof methodOn === 'function' ? methodOn('wallet') : true")
+  end
+
+  def test_the_click_tail_is_an_optional_local
+    # OPTIONAL, unlike modal_store, and that asymmetry is the design: a wrong
+    # store name fails as a dead button so it has no default, while an absent
+    # on_click has an obviously right answer — what every host did before the
+    # seam existed. fetch WITH a block, so the two existing hosts are untouched.
+    assert_match(/local_assigns\.fetch\(:on_click\)\s*do/, source)
+    refute_match(/local_assigns\.fetch\(:on_click\)\s*$/, source,
+                 "on_click must carry a default, or adding the seam breaks both hosts")
+  end
+
+  def test_the_click_tail_is_emitted_unescaped
+    # Without raw, ActionView escapes the handler and a host's && ships as an
+    # entity. It still WORKS, because the HTML parser decodes the attribute
+    # before Alpine reads it — so the page looks perfect and only the shipped
+    # bytes are wrong, which is why nothing else would notice. The render tier
+    # asserts the effect on the output; this asserts the marker in the template.
+    assert_includes source, %(@click="attested() && <%= raw on_click %>")
   end
 
   def test_the_store_name_is_a_required_local
