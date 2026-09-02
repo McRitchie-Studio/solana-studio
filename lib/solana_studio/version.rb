@@ -16,5 +16,5 @@ module SolanaStudio
   # through the normal cycle. Splitting the version out is the same shape
   # studio-engine already uses (lib/studio/version.rb) and hands each file back
   # to its real owner: this one to the release, the gemspec to the PR.
-  VERSION = "0.5.6"
+  VERSION = "0.5.7"
 end
