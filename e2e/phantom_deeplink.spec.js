@@ -435,10 +435,16 @@ test.describe("phantom deep link · the OPSEC-005 user binding", () => {
   });
 
   // THE OTHER HALF OF THE GUARD, and a branch nothing else drives. The partial
-  // gates on `linkMode && currentUserId`; the callback gates its reconstruction on
-  // the same conjunction. A version that gated on linkMode ALONE would sign
-  // "User-ID: null" — a statement whose substring the server would happily match
-  // against a user whose id is not null, and which every loose check accepts.
+  // gates on `linkMode && currentUserId`; studio-engine's callback gates its
+  // reconstruction on the same conjunction over the values THIS program parked. A
+  // version that gated on linkMode ALONE would sign "\nUser-ID: null" while the
+  // callback, finding no parked id, rebuilt the message WITHOUT that line — the two
+  // halves disagreeing about what was signed, which is the failure the binding
+  // exists to prevent showing up as the binding itself. The server's check is
+  // `message.to_s.include?("User-ID: #{expected_user_id}")` (studio-engine
+  // app/controllers/concerns/solana/session_auth.rb:33), and the literal "null"
+  // satisfies it for no real user, so the round trip ends in a refused wallet whose
+  // log line says only that the binding was missing.
   //
   // Asserted as a byte IDENTITY against a login-mode run rather than as an absence,
   // because "does not contain User-ID:" is the weak form: it cannot see a binding
