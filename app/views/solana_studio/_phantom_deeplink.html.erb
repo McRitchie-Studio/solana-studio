@@ -15,10 +15,17 @@
   leak the rest of it as visible text into every consuming app. The engine's
   erb_comment_leak_test enforces that, and it caught this very paragraph.)
 
-  It defines window.startPhantomDeepLink(linkMode, currentUserId). The engine's
-  wallet picker (solana_studio/modals/_wallet_connect) gates its mobile Phantom row on
-  that function EXISTING, so a consumer that does not render this partial keeps
-  its install row instead of painting a button that does nothing.
+  It defines window.startPhantomDeepLink(linkMode, currentUserId). THIS GEM's
+  wallet picker (solana_studio/modals/_wallet_connect) gates its mobile Phantom
+  row on that function EXISTING, so a consumer that does not render this partial
+  keeps its install row instead of painting a button that does nothing.
+
+  THE PICKER IS NOT THE ENGINE'S — do not read the engine references above as a
+  pattern to extend. studio-engine dropped studio/modals/_wallet_connect,
+  studio/modals/_web3_step_up and studio/solana together in 0.66.2 and has
+  shipped no wallet UI since; what it keeps is the SESSION half named above.
+  Anchored on that drop on purpose: a sentence naming the engine's CURRENT
+  version is falsified by its next release.
 
   THREE THINGS THAT MUST NOT BE MADE CONFIGURABLE — traced through
   Solana::SessionAuth#verify_solana_signature! before this was generalised:
