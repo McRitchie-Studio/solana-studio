@@ -249,9 +249,62 @@ correctly absent. And an app that declares `:wallet` but forgets the gem gets no
 button rather than a missing-partial error in front of someone signing in.
 
 The partial renders inside the modal's own Alpine scope and borrows three
-members from it — `methodOn('wallet')` for visibility, `attested()` for the
-legal-age gate, and `props.submitting` for the disabled state. It takes one
-required local, `modal_store`, which the engine passes.
+members from it — `attested()` for the legal-age gate, `props.submitting` for
+the disabled state, and `methodOn('wallet')` for visibility.
+
+Only the first two are required. `methodOn` is called behind a `typeof` test, so
+a host that never defined it **shows** the button rather than hiding it. A bare
+call in a host without the member throws, Alpine grades the throw as falsy, and
+the button **silently never renders** — no error a user can see, nothing in the
+page to debug. Bundling the gem has already answered *is wallet implemented*; a
+host with no toggle has expressed no opinion about showing it, and the answer to
+no opinion is yes. The test stays in Alpine deliberately: Ruby decides whether
+this partial exists, Alpine decides whether it shows, and folding the visibility
+into Ruby brings back a floating divider on a toggle page.
+
+#### Locals
+
+| Local | Required | What it does |
+|---|---|---|
+| `modal_store` | **yes** | Alpine store name backing the modal. The engine's real host passes `"modals"`, the living style guide passes `"dsModals"`. No default on purpose: a wrong store name fails as a dead button rather than an error, so missing beats wrong. |
+| `on_click` | no | Alpine expression run once the age gate passes. Defaults to swapping straight to the wallet-connect picker. Parenthesised before it is emitted, so any expression is safe to pass. |
+
+`on_click` replaces what happens **after** `attested()` — never `attested()`
+itself, which stays template text no local can reach. A seam carrying the whole
+handler could drop the legal-age gate by simply never calling it, and the button
+would look and behave completely normal.
+
+Keeping the gate out of the local guarantees it is **called**. Making it
+**control** what follows took one more step, because the two land side by side
+in a single JavaScript expression and precedence, not the template, decides
+which wins. `&&` binds tighter than `||`, `?:` and comma, so an override built
+on any of those would reparse and run its tail with the gate **false**. The
+override is therefore wrapped in parentheses before it is emitted, and you do
+not need to bracket it yourself. Measured in Chromium against studio-engine's
+vendored Alpine 3.16.1, both directions: with the gate false nothing runs, with
+the gate true the whole override runs.
+
+Pass it when the host has to do something before the picker navigates away. The
+picker's redirect is unconditional, so a host holding unsaved state must write
+it first. Turf Monster stages a contest lineup in `localStorage`, and adopting
+the default would lose that lineup on wallet sign-in:
+
+```erb
+<%= render "solana_studio/auth/wallet_credential",
+           modal_store: "modals",
+           on_click: "openWalletHub()" %>
+```
+
+The expression is emitted **unescaped**, because it is developer-authored code
+exactly like the template around it. Keep it free of double quotes — one closes
+the attribute early and Alpine mounts the button as a silent no-op — and keep it
+an **expression**: a statement (`let x = 1; foo()`) or a trailing `//` comment
+is a syntax error once Alpine wraps the handler, measured both before and after
+this change.
+
+What those constraints have in common is the point. Every one of them fails
+**loudly** — the button visibly does nothing. The precedence bug was the only
+one that failed silently, and it is the one this change removes.
 
 Why a contributed button and not a second auth modal: Turf Monster wants Google
 plus magic-link plus wallet, McRitchie Studio wants Google plus magic-link. A
