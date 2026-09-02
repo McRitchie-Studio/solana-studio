@@ -1,0 +1,9 @@
+<%# Test-only layout. It renders the picker THE WAY AN APP DOES — from the
+    layout, because that is where both consuming apps mount the modal host.
+    That timing is the whole point: rendered during the LAYOUT pass,
+    view_flow[:layout] already holds the captured page body, so a partial that
+    yields into it leaks that body into the card. Rendered from the TEMPLATE the
+    flow is still empty and nothing can leak, which is how the first version of
+    this probe went inert and passed with the defect restored. %>
+<div id="probe-host"><%= render "solana_studio/modals/wallet_connect" %></div>
+<%= yield %>

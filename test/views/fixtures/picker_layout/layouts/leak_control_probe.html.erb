@@ -1,0 +1,5 @@
+<%# The CONTROL's layout: identical in arrangement to wallet_picker_probe, but
+    it renders the deliberately-defective card instead of the shipped one. Any
+    difference between the two results is the card, not the harness. %>
+<div id="probe-host"><%= render "probe/leaky_card" %></div>
+<%= yield %>
