@@ -279,10 +279,10 @@ test.describe("phantom deep link", () => {
 //
 // WHY THE ASSERTION IS BYTES. A `toContain("User-ID:")` or a
 // /User-ID:\s*\d+/ passes on a binding built with a CRLF, a non-breaking space, or
-// any other separator the server's substring match would miss — the negative
-// control in the first spec builds exactly those and shows both loose checks
-// accepting them. Deleting B58_ALPHABET, the defect that actually shipped, left
-// the "does it parse" spec green; only the spec that compared BYTES went red. This
+// a missing space — the negative control below builds exactly those, shows both
+// loose checks accepting all three, and names the two different ways they break.
+// Deleting B58_ALPHABET, the defect that actually shipped, left the "does it
+// parse" spec green; only the spec that compared BYTES went red. This
 // is the same lesson applied to the same partial one layer up.
 
 // The binding's separator, spelled as the BYTES the server matches on rather than
@@ -290,8 +290,10 @@ test.describe("phantom deep link", () => {
 // because a wrong separator and a right one are the same shape on screen: a CRLF, a
 // non-breaking space, a missing space. The trailing 0x20 is why this file spends so
 // many words on ten bytes — it is a space, and every wrong version of it also looks
-// like a space. turf-monster's server check is an include? of "User-ID: <id>"
-// (test/controllers/solana_sessions_controller_test.rb), so that one byte is the
+// like a space. The check is studio-engine's Solana::SessionAuth —
+// `message.include?("User-ID: #{expected_user_id}")`, in
+// app/controllers/concerns/solana/session_auth.rb, covered from turf-monster in
+// test/controllers/solana_sessions_controller_test.rb — so that one byte is the
 // difference between a bound signature and an unbound one.
 //
 //                       \n    U     s     e     r     -     I     D     :   space
@@ -382,9 +384,13 @@ test.describe("phantom deep link · the OPSEC-005 user binding", () => {
     //    "wrong" binding byte-identical to the right one — the exact invisibility
     //    this spec exists to remove, reproduced while writing the spec for it.
     //
-    //    The server's OPSEC-005 check is a SUBSTRING match on "User-ID: <id>", so
-    //    every one of these binds nothing while looking correct in a log, in a
-    //    debugger, and in a code review.
+    //    The server's OPSEC-005 check is a SUBSTRING match on "User-ID: <id>", and
+    //    it catches only TWO of the three. The nbsp and the missing space break the
+    //    needle, so they bind nothing. The CRLF sits BEFORE the needle and leaves it
+    //    intact, so the server BINDS and the failure moves one seam later: the
+    //    callback rebuilds the statement with '\n', so what it posts is not what
+    //    Phantom signed and ed25519 verification fails. Two failure modes, and all
+    //    three look correct in a log, in a debugger, and in a code review.
     const wrongBindings = {
       "CRLF separator": "\r\nUser-ID: " + USER_ID,
       "non-breaking space after the colon": "\nUser-ID:\u00a0" + USER_ID,
