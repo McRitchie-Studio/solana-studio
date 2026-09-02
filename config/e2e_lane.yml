@@ -35,8 +35,8 @@
 # TO CHANGE THESE NUMBERS you must edit this file, which is a visible, reviewable
 # diff line with a comment attached. That is the point: the hole cannot grow
 # silently. DERIVE them, never count by hand: `npx playwright test --list`.
-total_specs: 10
+total_specs: 12
 files:
   e2e/network_guard.spec.js: 4
   e2e/network_mismatch_modal.spec.js: 3
-  e2e/phantom_deeplink.spec.js: 3
+  e2e/phantom_deeplink.spec.js: 5

@@ -246,3 +246,225 @@ test.describe("phantom deep link", () => {
     expect(errors).toEqual([]);
   });
 });
+
+// ── OPSEC-005: THE USER-ID BINDING ────────────────────────────────────────────
+//
+// The specs above drive LOGIN mode, where the statement is just the app's own
+// sentence. LINK mode — connecting a wallet to an account that is ALREADY signed
+// in — appends one line:
+//
+//     statement + '\nUser-ID: ' + currentUserId
+//
+// and that line is the entire mechanism tying a signature to an account. Nothing
+// in any repo proved the client builds it. Checked, not assumed, before this file
+// grew: turf-monster covers the SERVER's substring check
+// (test/controllers/solana_sessions_controller_test.rb) and that the picker passes
+// BOTH arguments (test/views/phantom_deeplink_adoption_test.rb); its browser spec
+// names startPhantomDeepLink only in comments and never calls it in link mode; and
+// the spec above asserts the login-mode NEGATIVE, which is the absence of this
+// line rather than its shape. The construction itself was watched by nobody.
+//
+// WHY THAT IS OPSEC AND NOT COVERAGE BOOKKEEPING. Get the line wrong — wrong id,
+// wrong separator, no line at all — and the user signs a statement that does not
+// say what the server will later assume it said. It is the same failure shape as
+// the encoder above: the wallet signs, the request posts, nothing throws, and the
+// binding either silently fails to bind or binds to someone else.
+//
+// AND THE LINE HAS A SECOND READER. studio-engine's solana_sessions/phantom_callback
+// RECONSTRUCTS the signed message from localStorage when Phantom returns without
+// one, re-running `statementLine += '\nUser-ID: ' + storedUserId` over the id THIS
+// program parked. So the id inside the signature and the id left behind for the
+// callback have to be the same bytes, or the reconstruction signs a different
+// message than the wallet did. That coupling is asserted below.
+//
+// WHY THE ASSERTION IS BYTES. A `toContain("User-ID:")` or a
+// /User-ID:\s*\d+/ passes on a binding built with a CRLF, a non-breaking space, or
+// any other separator the server's substring match would miss — the negative
+// control in the first spec builds exactly those and shows both loose checks
+// accepting them. Deleting B58_ALPHABET, the defect that actually shipped, left
+// the "does it parse" spec green; only the spec that compared BYTES went red. This
+// is the same lesson applied to the same partial one layer up.
+
+// The binding's separator, spelled as the BYTES the server matches on rather than
+// as a string literal. A literal is invisible to exactly the mutations that matter,
+// because a wrong separator and a right one are the same shape on screen: a CRLF, a
+// non-breaking space, a missing space. The trailing 0x20 is why this file spends so
+// many words on ten bytes — it is a space, and every wrong version of it also looks
+// like a space. turf-monster's server check is an include? of "User-ID: <id>"
+// (test/controllers/solana_sessions_controller_test.rb), so that one byte is the
+// difference between a bound signature and an unbound one.
+//
+//                       \n    U     s     e     r     -     I     D     :   space
+const BINDING_BYTES = [0x0a, 0x55, 0x73, 0x65, 0x72, 0x2d, 0x49, 0x44, 0x3a, 0x20];
+
+// A Rails id, as an integer, because that is what a caller passes — the partial
+// interpolates it into a string and String()s it into localStorage, and those two
+// coercions are separate code paths that can disagree. 4242 is deliberately a
+// value whose hex spelling (1092) differs from its decimal one, so a coercion
+// that changed base is visible rather than plausible.
+const USER_ID = 4242;
+
+const textBytes = (str) => Array.from(new TextEncoder().encode(str));
+
+// The lab, in the state that renders the partial, PROVEN to be that state. Without
+// the attribute check a redirect or a 404 body would let every assertion below
+// describe some other document — the failure mode where a probe "passes" while
+// sitting on a page that was never under test.
+async function openLab(page) {
+  await page.goto("/lab/phantom_deeplink?deeplink=1");
+  await expect(page.locator('[data-test="deeplink-state"]')).toHaveAttribute("data-deeplink", "true");
+}
+
+// One full hand-off: call the real entry point, catch the navigation, decode what
+// the user would have signed. Returns the statement as BYTES, because that is the
+// only form in which the questions below have a definite answer.
+async function driveDeepLink(page, linkMode, userId) {
+  const navigation = page.waitForRequest(
+    (r) => r.url().startsWith("https://phantom.app/ul/v1/signIn"),
+    { timeout: 15000 },
+  );
+  await page.evaluate(([mode, id]) => window.startPhantomDeepLink(mode, id), [linkMode, userId]);
+  const url = new URL((await navigation).url());
+
+  // The request being ISSUED and the browser actually GOING there are different
+  // events; waiting for the second also makes the return trip below deterministic
+  // rather than a race against a navigation still committing.
+  await page.waitForURL(/^https:\/\/phantom\.app\/ul\/v1\/signIn/);
+
+  const siws = JSON.parse(new TextDecoder().decode(decodeBase58(url.searchParams.get("payload"))));
+  return { siws, statementBytes: textBytes(siws.statement) };
+}
+
+test.describe("phantom deep link · the OPSEC-005 user binding", () => {
+  test("link mode appends the binding to the statement, byte for byte", async ({ page }) => {
+    // THE INSTRUMENT CHECK, as the encoder spec does it: the hand-written byte
+    // list and the separator it claims to spell, cross-checked against each other
+    // before either is used to judge the partial. Both live in this file, so
+    // neither can be moved by a defect in the thing under test.
+    expect(new TextDecoder().decode(Uint8Array.from(BINDING_BYTES))).toBe("\nUser-ID: ");
+
+    const errors = watchPageErrors(page);
+    await stubTheFlow(page);
+
+    // ── RUN 1: login mode, which establishes the BASELINE ─────────────────────
+    //
+    // Measured, not hardcoded. The base statement comes from Studio.app_name
+    // through Studio.wallet_sign_in_statement and every consumer sets it to
+    // something different, so a literal here would be asserting turf-monster's
+    // configuration rather than this gem's behaviour. Driving the same program on
+    // the same page with one argument changed isolates the binding as the ONLY
+    // thing that can account for a difference between the two runs.
+    await openLab(page);
+    const login = await driveDeepLink(page, false, null);
+
+    // ── RUN 2: link mode, one argument different ──────────────────────────────
+    await openLab(page);
+    const link = await driveDeepLink(page, true, USER_ID);
+
+    // 1. THE BASE STATEMENT SURVIVES UNTOUCHED. The binding is an APPEND; a
+    //    version that prefixed it, re-cased the sentence, or rebuilt the statement
+    //    around the id would still contain "User-ID: 4242" and still satisfy every
+    //    loose check, and would fail here.
+    expect(link.statementBytes.slice(0, login.statementBytes.length)).toEqual(login.statementBytes);
+
+    // 2. THE TAIL IS EXACTLY THE BINDING AND NOTHING ELSE. Composed from the two
+    //    independently-checked halves — the separator bytes above and the id this
+    //    spec passed in — so a wrong separator and a wrong id are separately
+    //    visible in the failure rather than collapsing into "the tail differs".
+    const tail = link.statementBytes.slice(login.statementBytes.length);
+    expect(tail).toEqual([...BINDING_BYTES, ...textBytes(String(USER_ID))]);
+
+    // 3. NEGATIVE CONTROL — the point of the whole file.
+    //
+    //    Three wrong bindings, each one a reader would have to look twice to spot.
+    //    They are built from ESCAPES rather than typed, because the first draft of
+    //    this block typed the non-breaking space as an ordinary one and produced a
+    //    "wrong" binding byte-identical to the right one — the exact invisibility
+    //    this spec exists to remove, reproduced while writing the spec for it.
+    //
+    //    The server's OPSEC-005 check is a SUBSTRING match on "User-ID: <id>", so
+    //    every one of these binds nothing while looking correct in a log, in a
+    //    debugger, and in a code review.
+    const wrongBindings = {
+      "CRLF separator": "\r\nUser-ID: " + USER_ID,
+      "non-breaking space after the colon": "\nUser-ID:\u00a0" + USER_ID,
+      "no space after the colon": "\nUser-ID:" + USER_ID,
+    };
+
+    for (const [label, wrong] of Object.entries(wrongBindings)) {
+      // THE TWO CHECKS A REVIEWER REACHES FOR FIRST, and both ACCEPT all three
+      // wrong bindings — asserted rather than claimed, so the argument for the
+      // byte comparison below is demonstrated in the file that makes it.
+      expect(wrong, `${label}: a substring check accepts it, which is the problem`)
+        .toContain("User-ID:");
+      expect(wrong, `${label}: the tighter regex accepts it too`).toMatch(/\sUser-ID:\s*\d+/);
+
+      // THE COMPARISON THIS SPEC ACTUALLY MAKES, and it rejects them.
+      expect(textBytes(wrong), `${label}: the byte comparison must reject it`).not.toEqual(tail);
+    }
+
+    //    And the control that keeps the loop above meaningful: the comparison
+    //    ACCEPTS the correct binding. An assertion that rejected everything would
+    //    satisfy every line in the loop while proving nothing.
+    expect(textBytes("\nUser-ID: " + USER_ID)).toEqual(tail);
+
+    // 4. THE ID PARKED FOR THE CALLBACK IS THE ID INSIDE THE SIGNATURE.
+    //
+    //    studio-engine's phantom_callback rebuilds the signed message from
+    //    localStorage when Phantom returns without one. If these two ever disagree
+    //    — a base change, a truncation, an object stringified one way here and
+    //    another there — the reconstruction posts a message the wallet never
+    //    signed, and verification fails with nothing in the log to say why.
+    //
+    //    Read from the LAB's origin: the call above navigated to the phantom.app
+    //    stub and localStorage is per-origin, so reading it there would ask the
+    //    wrong document and get null for everything.
+    await openLab(page);
+    const parked = await page.evaluate(() => ({
+      userId: localStorage.getItem("phantom_dl_user_id"),
+      linkMode: localStorage.getItem("phantom_dl_link_mode"),
+    }));
+
+    expect(textBytes(parked.userId)).toEqual(tail.slice(BINDING_BYTES.length));
+    // The callback gates its reconstruction on BOTH keys, so link mode has to
+    // survive the handoff too — an id parked under link_mode "false" is an id the
+    // callback will never read.
+    expect(parked.linkMode).toBe("true");
+
+    expect(errors).toEqual([]);
+  });
+
+  // THE OTHER HALF OF THE GUARD, and a branch nothing else drives. The partial
+  // gates on `linkMode && currentUserId`; the callback gates its reconstruction on
+  // the same conjunction. A version that gated on linkMode ALONE would sign
+  // "User-ID: null" — a statement whose substring the server would happily match
+  // against a user whose id is not null, and which every loose check accepts.
+  //
+  // Asserted as a byte IDENTITY against a login-mode run rather than as an absence,
+  // because "does not contain User-ID:" is the weak form: it cannot see a binding
+  // built with a different separator, which is precisely the class this file exists
+  // to catch.
+  test("link mode without a user id signs the same bytes as a plain login", async ({ page }) => {
+    const errors = watchPageErrors(page);
+    await stubTheFlow(page);
+
+    await openLab(page);
+    const login = await driveDeepLink(page, false, null);
+
+    // A STALE BINDING from an earlier link attempt, seeded immediately before the
+    // run that must clear it. localStorage survives the round trip to Phantom by
+    // design — that is how the callback gets its state — so an id left behind by a
+    // previous attempt is a real page state, and one the callback would replay into
+    // a message this user never signed.
+    await openLab(page);
+    await page.evaluate(() => localStorage.setItem("phantom_dl_user_id", "999999"));
+    const linkNoId = await driveDeepLink(page, true, null);
+
+    expect(linkNoId.statementBytes).toEqual(login.statementBytes);
+
+    await openLab(page);
+    expect(await page.evaluate(() => localStorage.getItem("phantom_dl_user_id"))).toBeNull();
+
+    expect(errors).toEqual([]);
+  });
+});
