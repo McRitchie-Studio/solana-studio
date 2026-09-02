@@ -110,7 +110,7 @@ class Web3StepUpModalTest < Minitest::Test
   def test_the_modal_store_is_a_local_so_a_host_can_mount_its_own
     assert_includes render_card, "$store.modals.current()"
     assert_includes render_card(modal_store: "dsModals"), "$store.dsModals.current()"
-    refute_includes render_card(modal_store: "dsModals"), "$store.modals.current()",
+    refute_includes render_card(modal_store: "dsModals"), "$store.modals.",
                     "a half-swapped store leaves the card reading a host it is not mounted in"
   end
 
