@@ -217,9 +217,12 @@ gates the render on `lookup_context.exists?("wallet_credential",
 unrelated question.
 
 The two gems set the floor together, and the pair matters more than either
-number:
+number. Every row below also assumes the host has wallet sign-in **configured
+on** — `Studio.auth_method?(:wallet)` and `Studio.feature?(:web3)`, the two
+questions in the table further down. McRitchie Studio leaves them off, so it
+shows no wallet button on any pair of versions:
 
-| studio-engine | this gem | The sign-in modal shows |
+| studio-engine | this gem | The sign-in modal shows, wallet configured on |
 |---|---|---|
 | 0.67.2, the last release below the floor | 0.5.3+ | the **engine's own** inline button; this gem's partial renders nowhere |
 | 0.68.0+ | 0.5.3+ | **this gem's partial** — the arrangement described above |
