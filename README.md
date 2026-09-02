@@ -297,9 +297,14 @@ the default would lose that lineup on wallet sign-in:
 
 The expression is emitted **unescaped**, because it is developer-authored code
 exactly like the template around it. Keep it free of double quotes — one closes
-the attribute early and Alpine mounts the button as a silent no-op. That is the
-one constraint left on what you can pass, and it fails loudly: the button
-visibly does nothing.
+the attribute early and Alpine mounts the button as a silent no-op — and keep it
+an **expression**: a statement (`let x = 1; foo()`) or a trailing `//` comment
+is a syntax error once Alpine wraps the handler, measured both before and after
+this change.
+
+What those constraints have in common is the point. Every one of them fails
+**loudly** — the button visibly does nothing. The precedence bug was the only
+one that failed silently, and it is the one this change removes.
 
 Why a contributed button and not a second auth modal: Turf Monster wants Google
 plus magic-link plus wallet, McRitchie Studio wants Google plus magic-link. A
