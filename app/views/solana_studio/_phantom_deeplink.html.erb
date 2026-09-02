@@ -23,7 +23,12 @@
   THE PICKER IS NOT THE ENGINE'S — do not read the engine references above as a
   pattern to extend. studio-engine dropped studio/modals/_wallet_connect,
   studio/modals/_web3_step_up and studio/solana together in 0.66.2 and has
-  shipped no wallet UI since; what it keeps is the SESSION half named above.
+  shipped no wallet picker or signing card OF ITS OWN since; the style guide's
+  style/modals/_wallet_connect is a thin configuration that renders THIS gem's
+  partial. It did NOT stop shipping wallet UI altogether — that is the opposite
+  error: it keeps the SESSION half named above and the shared brand sprite
+  studio/modals/blocks/_wallet_brand_sprite, which this gem's own picker and
+  step-up card both render.
   Anchored on that drop on purpose: a sentence naming the engine's CURRENT
   version is falsified by its next release.
 
