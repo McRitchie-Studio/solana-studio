@@ -183,8 +183,9 @@ studio-engine owns the sign-in modal, because every app in the ecosystem signs
 people in and most of them are web2. This gem owns the **wallet button** inside
 it, because only a web3 app has wallets.
 
-There is **nothing to wire up.** The engine's auth modal looks for a partial at
-one fixed path and renders whatever it finds:
+There is **nothing to wire up**, on studio-engine **0.68.0 or newer**. The
+engine's auth modal looks for a partial at one fixed path and renders whatever
+it finds:
 
     solana_studio/auth/_wallet_credential
 
@@ -192,6 +193,48 @@ Bundling this gem puts that partial on the host's view path, so the button
 appears. An app that does not bundle it finds nothing and renders nothing — no
 wallet markup ships to a newsletter app, and no `render` call has to be deleted
 to keep it out.
+
+#### The studio-engine floor: 0.68.0
+
+**0.68.0 is the first studio-engine that performs the lookup.** Until it, the
+engine's `style/modals/_auth` drew the Solana button itself, inline, and never
+consulted `solana_studio/auth/wallet_credential` at all — this gem shipped the
+partial, its tests and this section for a button no host rendered. 0.68.0
+deleted that inline copy and put the lookup in its place, which is what made the
+paragraph above true.
+
+Below the floor the partial is **inert, and nothing says so.** It sits on the
+view path and is never asked for: no `render` runs, no button comes from it, and
+no error reaches the page or the log. A host that edits the partial and sees the
+modal unchanged should suspect the engine version first — that silence, not a
+stack trace, is the symptom.
+
+Derived by unpacking the published gems rather than reading a changelog: 0.67.2
+contains no reference to `solana_studio/auth` anywhere in `app/`, and 0.68.0
+gates the render on `lookup_context.exists?("wallet_credential",
+["solana_studio/auth"], true)`. Match on the **namespace, not the basename** —
+`style/modals/_wallet_connect` ships unchanged in both releases and answers an
+unrelated question.
+
+The two gems set the floor together, and the pair matters more than either
+number. Every row below also assumes the host has wallet sign-in **configured
+on** — `Studio.auth_method?(:wallet)` and `Studio.feature?(:web3)`, the two
+questions in the table further down. McRitchie Studio leaves them off, so it
+shows no wallet button on any pair of versions:
+
+| studio-engine | this gem | The sign-in modal shows, wallet configured on |
+|---|---|---|
+| 0.67.2, the last release below the floor | 0.5.3+ | the **engine's own** inline button; this gem's partial renders nowhere |
+| 0.68.0+ | 0.5.3+ | **this gem's partial** — the arrangement described above |
+| either side of the floor | 0.5.2 | **no wallet button, silently** — see below |
+| either side of the floor | not bundled | no wallet button, correctly — a web2 app ships no wallet markup |
+
+**0.5.2 is the trap.** It shipped `solana_studio/auth/_wallet_credential`
+*without* `solana_studio/modals/_wallet_connect`, and both engines gate the
+button on that picker resolving (the engine's `web3_gem` gate), so the credential
+partial is present, correct, and suppressed either side of the floor. 0.5.3 is
+the first version of this gem shipping both paths, and so the first that can
+draw the button at all.
 
 The engine asks two questions and needs both answered yes:
 
@@ -214,6 +257,7 @@ Why a contributed button and not a second auth modal: Turf Monster wants Google
 plus magic-link plus wallet, McRitchie Studio wants Google plus magic-link. A
 forked modal would put a surface both apps sign in through into two files, which
 is how the wallet picker reached three copies before it was promoted.
+
 ### Web3 modals
 
 Four partials promoted out of studio-engine, where every consumer paid for them
