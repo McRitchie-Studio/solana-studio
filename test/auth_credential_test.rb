@@ -75,10 +75,42 @@ class AuthCredentialTest < Minitest::Test
     # OPTIONAL, unlike modal_store, and that asymmetry is the design: a wrong
     # store name fails as a dead button so it has no default, while an absent
     # on_click has an obviously right answer — what every host did before the
-    # seam existed. fetch WITH a block, so the two existing hosts are untouched.
-    assert_match(/local_assigns\.fetch\(:on_click\)\s*do/, source)
-    refute_match(/local_assigns\.fetch\(:on_click\)\s*$/, source,
-                 "on_click must carry a default, or adding the seam breaks both hosts")
+    # seam existed.
+    #
+    # BOUND TO THE CONCERN, NOT TO ONE SPELLING OF IT. This asserted
+    # /local_assigns\.fetch\(:on_click\)\s*do/ until the precedence fix traded
+    # fetch-with-block for a key? branch, and it went red over a change that
+    # preserved every property it existed to protect — including, verified next
+    # door, byte-identical output for a host that passes no local. An assertion
+    # that names one legal way to write a default breaks on every legal refactor
+    # of that default, and an assertion that cries wolf is one that gets
+    # loosened. The concern is that on_click is READ, and read in a way that
+    # tolerates its ABSENCE.
+    assert_includes source, ":on_click", "the template must still read the on_click local"
+    refute_match(/local_assigns\.fetch\(:on_click\)(?!\s*(do\b|\{|,))/, source,
+                 "a fetch(:on_click) with no default or block RAISES for the two hosts " \
+                 "that pass no local, which is the whole additive contract of the seam")
+  end
+
+  def test_an_overridden_tail_is_parenthesised_before_it_is_emitted
+    # THE DEFECT THIS PINS: `&&` binds TIGHTER than `||`, `?:` and comma, so an
+    # override whose top-level operator is one of those reparses and its tail
+    # runs even when attested() returned FALSE — a click past a legal-age gate
+    # it had just failed. Measured in Chromium against the vendored Alpine
+    # 3.16.1: an on_click of `saveCart() || openWalletHub()` ran openWalletHub.
+    #
+    # DUPLICATED FROM THE RENDER TIER ON PURPOSE, exactly like the typeof guard
+    # above: this suite is Rails-free, so it is the copy that still runs when a
+    # view context cannot boot at all.
+    #
+    # AND IT IS THE WEAKER COPY, stated plainly so nobody reads a green run here
+    # as the proof. This matches CHARACTERS. The authority is
+    # test/views/auth_wallet_credential_test.rb, which evaluates the emitted
+    # handler in a JS engine and asserts the gate CONTROLS the tail — a property
+    # of the parse that no source match can see.
+    assert_match(/\(\#\{\s*local_assigns\[:on_click\]\s*\}\)/, source,
+                 "an overridden tail must be parenthesised where it is built, or a " \
+                 "top-level ||, ?: or comma reparses past the age gate")
   end
 
   def test_the_click_tail_is_emitted_unescaped

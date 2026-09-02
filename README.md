@@ -267,12 +267,22 @@ into Ruby brings back a floating divider on a toggle page.
 | Local | Required | What it does |
 |---|---|---|
 | `modal_store` | **yes** | Alpine store name backing the modal. The engine's real host passes `"modals"`, the living style guide passes `"dsModals"`. No default on purpose: a wrong store name fails as a dead button rather than an error, so missing beats wrong. |
-| `on_click` | no | Alpine expression run once the age gate passes. Defaults to swapping straight to the wallet-connect picker. |
+| `on_click` | no | Alpine expression run once the age gate passes. Defaults to swapping straight to the wallet-connect picker. Parenthesised before it is emitted, so any expression is safe to pass. |
 
 `on_click` replaces what happens **after** `attested()` — never `attested()`
 itself, which stays template text no local can reach. A seam carrying the whole
 handler could drop the legal-age gate by simply never calling it, and the button
 would look and behave completely normal.
+
+Keeping the gate out of the local guarantees it is **called**. Making it
+**control** what follows took one more step, because the two land side by side
+in a single JavaScript expression and precedence, not the template, decides
+which wins. `&&` binds tighter than `||`, `?:` and comma, so an override built
+on any of those would reparse and run its tail with the gate **false**. The
+override is therefore wrapped in parentheses before it is emitted, and you do
+not need to bracket it yourself. Measured in Chromium against studio-engine's
+vendored Alpine 3.16.1, both directions: with the gate false nothing runs, with
+the gate true the whole override runs.
 
 Pass it when the host has to do something before the picker navigates away. The
 picker's redirect is unconditional, so a host holding unsaved state must write
@@ -287,7 +297,9 @@ the default would lose that lineup on wallet sign-in:
 
 The expression is emitted **unescaped**, because it is developer-authored code
 exactly like the template around it. Keep it free of double quotes — one closes
-the attribute early and Alpine mounts the button as a silent no-op.
+the attribute early and Alpine mounts the button as a silent no-op. That is the
+one constraint left on what you can pass, and it fails loudly: the button
+visibly does nothing.
 
 Why a contributed button and not a second auth modal: Turf Monster wants Google
 plus magic-link plus wallet, McRitchie Studio wants Google plus magic-link. A
