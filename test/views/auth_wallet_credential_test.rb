@@ -47,8 +47,18 @@ class AuthWalletCredentialTest < Minitest::Test
   # --- the default, unchanged ------------------------------------------------
 
   def test_a_host_that_passes_no_on_click_gets_the_original_handler
-    # THE ADDITIVE CONTRACT. Two hosts already render this partial — the engine's
-    # real modal and its living style guide — and neither knows the local exists.
+    # THE ADDITIVE CONTRACT. The ONE host that renders this partial today — the
+    # engine's living style guide — does not know the local exists.
+    #
+    # COUNTED, because this comment used to say "two hosts ... the engine's real
+    # modal and its living style guide" and the second one does not exist. Every
+    # render site of solana_studio/auth/wallet_credential across studio-engine,
+    # mcritchie-studio and turf-monster, on accepted AND main, is a single line:
+    # studio-engine's style/modals/_auth.html.erb:238, passing modal_store only.
+    # "modals" is the store the engine's real modal HOST registers
+    # (studio/modals/_host.html.erb) — a naming convention this partial honours,
+    # not a second caller. The byte-identity argument leans on that inventory,
+    # so the inventory is stated as measured rather than assumed.
     assert_equal DEFAULT_CLICK, button(render_credential)["@click"]
   end
 

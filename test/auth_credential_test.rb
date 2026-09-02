@@ -88,8 +88,8 @@ class AuthCredentialTest < Minitest::Test
     # tolerates its ABSENCE.
     assert_includes source, ":on_click", "the template must still read the on_click local"
     refute_match(/local_assigns\.fetch\(:on_click\)(?!\s*(do\b|\{|,))/, source,
-                 "a fetch(:on_click) with no default or block RAISES for the two hosts " \
-                 "that pass no local, which is the whole additive contract of the seam")
+                 "a fetch(:on_click) with no default or block RAISES for the host " \
+                 "that passes no local, which is the whole additive contract of the seam")
   end
 
   def test_an_overridden_tail_is_parenthesised_before_it_is_emitted
