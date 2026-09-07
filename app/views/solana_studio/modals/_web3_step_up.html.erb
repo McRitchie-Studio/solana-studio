@@ -27,9 +27,13 @@
     help_url        — the escape hatch for a user who cannot reach their wallet
                       (default "/help"). Set to nil to drop the line entirely.
     help_label      — (default "Get help")
-    picker_modal_id — the host's brand picker, reached by "Use a different
-                      wallet" (default "wallet-connect"). The picker is expected
-                      to honour a `backTo` prop pointing back at this card.
+    picker_modal_id — the host's brand picker (default "wallet-connect"). TWO
+                      routes reach it: the no-remembered-brand button, which IS
+                      the picker's opener, and the quiet "Not your wallet?" link
+                      beside the address. (Both replaced a full-width "Use a
+                      different wallet" row dropped on 2026-09-06.) The picker
+                      is expected to honour a `backTo` prop pointing back at
+                      this card.
     modal_id        — this card's own id, passed to the picker as backTo
                       (default "web3-step-up")
     modal_store     — Alpine store name (default "modals"; the living style
@@ -69,8 +73,7 @@
 <%
   heading         = local_assigns.fetch(:heading, "Sign in with your wallet")
   subtext         = local_assigns.fetch(:subtext,
-                      "This account is secured by a Solana wallet. You are signed in, but this " \
-                      "session can’t sign on-chain — so on-chain actions still need your wallet.")
+                      "Your account is secured by a Solana wallet.")
   help_url        = local_assigns.fetch(:help_url, "/help")
   help_label      = local_assigns.fetch(:help_label, "Get help")
   picker_modal_id = local_assigns.fetch(:picker_modal_id, "wallet-connect")
@@ -83,9 +86,16 @@
        connecting: false,
        error: '',
        // Set when the remembered wallet turns out not to be reachable in THIS
-       // browser (a different machine, the extension removed). It flips the card
-       // to the picker rather than leaving the user pressing a button that
-       // cannot work.
+       // browser (a different machine, the extension removed). WRITTEN IN ONE
+       // PLACE ONLY — inside signIn(), after the reachable() guard — so it
+       // never pre-empts: init(), refresh() and the poll below all leave it
+       // alone. The user presses the brand button, reads the error, and only
+       // THEN does the card fall back to the no-brand row. That row is the
+       // BUTTON that opens the picker, not the picker itself. Since 2026-09-06
+       // that is no longer the ONLY way out of a wallet we remember wrongly:
+       // the address line carries a link to the picker, so an unreachable or
+       // simply WRONG remembered wallet is correctable without first pressing
+       // a button that cannot work.
        providerMissing: false,
        // Which wallets this document can actually see. Read on a poll, NOT once
        // at mount: wallet provider registration fills in asynchronously, and
@@ -191,9 +201,80 @@
             aria-label="Close">&times;</button>
   </div>
 
-  <%= render "studio/modals/blocks/card_header", icon_emoji: "🔐", title: heading do %>
+  <%# NOT blocks/_card_header, and the reason is a missing slot rather than a
+      preference. That block takes an emoji, a spinner, or one of two fixed
+      icons — there is no slot for a BRAND MARK, and its else-branch paints a
+      CHECK MARK tinted with the theme's own primary token: line 63-64 of
+      _card_header.html.erb draws bg-<icon_color>/15 with icon_color defaulting
+      to 'primary', so the colour follows the host's theme and is green only
+      where primary is. Either way it cannot render this card's icon at all,
+      which is the point. One card needing
+      a brand header is not yet a primitive: per the modal-lifecycle module the
+      trigger is a second consumer or a third copy, and this is the first. When a
+      second card wants one, add an icon slot to card_header rather than a
+      second hand-rolled header here.
+
+      THE MARK IS THE WALLET, not a padlock. The card is asking the user to reach
+      for a specific object; showing them the object beats a generic security
+      glyph, and where we remember WHICH wallet we show that brand — the same
+      mark the button below carries, so the card names one thing twice rather
+      than two things once. With no remembered brand it falls back to the neutral
+      billfold this file already draws for its no-brand button. %>
+  <div class="text-center mb-4">
+    <template x-if="canOneClick">
+      <span class="inline-flex w-14 h-14 rounded-2xl overflow-hidden items-center justify-center">
+        <svg class="w-14 h-14" aria-hidden="true"><use :href="'#se-wallet-' + provider"></use></svg>
+      </span>
+    </template>
+    <template x-if="!canOneClick">
+      <span class="inline-flex w-14 h-14 rounded-2xl bg-inset items-center justify-center" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" class="w-7 h-7 text-secondary">
+          <rect x="3" y="6.5" width="18" height="11" rx="2.5" />
+          <circle cx="16.6" cy="12" r="1.3" fill="currentColor" stroke="none" />
+        </svg>
+      </span>
+    </template>
+  </div>
+
+  <h3 class="text-heading font-bold text-lg leading-tight text-center mb-2"><%= heading %></h3>
+
+  <%# ONE LINE, plus a second only when we can name the wallet. The previous copy
+      ran four lines explaining that the session cannot sign on-chain — true, and
+      more than a person standing in front of a button needs. The address is the
+      part that earns its place: it is how the user confirms the card is asking
+      for the wallet they think it is, which is why it moved UP here from the
+      footnote under the button.
+
+      AND THE ONE THING THE ADDRESS ALONE CANNOT DO IS CORRECT IT. Naming the
+      wallet makes a mismatch VISIBLE without making it ACTIONABLE, which is
+      worse than not naming it — so the address carries a quiet link that opens
+      the picker. It replaces a full-width alternate-wallet row (dropped as an
+      operator call): same handler, a fraction of the layout, and the card still
+      runs CTA then Not now.
+
+      TWO GATES, and they answer different questions. The x-if is walletHint —
+      no address means no sentence to correct. The x-show is canOneClick,
+      because when there is no remembered brand the PRIMARY button is already
+      the picker: the link would be a second door into the same room, competing
+      with the one action this card exists to offer. Note that these two states
+      are NOT the same — an account that linked its wallet before the host
+      stored the brand has an address and no brand — which is exactly why the
+      link needs both. %>
+  <div class="text-center mb-5">
     <p class="text-sm text-body"><%= subtext %></p>
-  <% end %>
+    <template x-if="walletHint">
+      <p class="text-sm text-body mt-1">Please sign in with wallet
+        <%# BESIDE the address, and the nowrap is what keeps it there. Without it
+            the link wraps onto a line of its own, centred under the sentence —
+            which is visually the row this replaced, at a smaller size. The group
+            breaks as ONE unit, so a narrow card moves the address and the link
+            down together instead of splitting them. %>
+        <span class="whitespace-nowrap"><span class="font-mono text-secondary"
+              x-text="walletHint"></span><button type="button" @click="openPicker()"
+              :disabled="connecting" x-show="canOneClick"
+              class="ml-1 text-xs text-muted underline hover:text-secondary disabled:opacity-50">Not your wallet?</button></span></p>
+    </template>
+  </div>
 
   <%# PRIMARY — THE STANDARD WEB3 AUTH BUTTON: a wallet row, not a filled CTA.
       Same shape the connect picker uses — brand mark, the wallet's own name, an
@@ -219,16 +300,6 @@
           </svg>
         </span>
       </button>
-      <%# One line on what pressing it DOES. A signature prompt is alarming
-          without it, and "no funds move" is the difference between clicking and
-          bailing. The address rides here so the user can confirm the card is
-          asking for the wallet they think it is. %>
-      <p class="text-[11px] text-muted mt-1.5 px-1">
-        Signing proves the wallet is yours &mdash; it does not move any funds.
-        <template x-if="walletHint">
-          <span>Wallet <span class="font-mono text-secondary" x-text="walletHint"></span></span>
-        </template>
-      </p>
     </div>
   </template>
 
@@ -264,14 +335,6 @@
     <p role="alert" class="text-red-400 text-sm mt-3 text-center" x-text="error"></p>
   </template>
 
-  <%# SECONDARY — always reachable, so a user whose remembered wallet is the
-      wrong one is never cornered by our memory of it. %>
-  <template x-if="canOneClick">
-    <button type="button" @click="openPicker()" :disabled="connecting"
-            class="mt-3 block w-full text-center text-sm text-secondary hover:text-heading disabled:opacity-50">
-      Use a different wallet
-    </button>
-  </template>
 
   <div class="mt-4 pt-3 border-t border-strong">
     <button type="button" @click="dismiss()" :disabled="connecting"
