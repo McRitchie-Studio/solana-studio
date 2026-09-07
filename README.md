@@ -349,6 +349,63 @@ exists to prevent — so this is a documented host requirement, not something th
 gem can enforce from inside. `solana_studio/modals/network_mismatch` already
 shipped on exactly these terms.
 
+#### The host JavaScript these modals reach for
+
+Every global below belongs to the **host**. This gem ships one JavaScript file
+(`solana_studio/network_guard.js`) and **no routes at all**, so none of these can
+live here. Each is reached behind a `typeof` guard: an absent one degrades the
+card rather than breaking it, and the whole point of writing the list down is
+that a consumer meets it here instead of rediscovering it.
+
+| Global | Needed by | Absent means |
+|---|---|---|
+| `window.solanaConnectAndVerify(name, opts)` | both | **required** — nothing can connect |
+| `window.walletProvider` | both | **required** — no wallet rows paint |
+| `window.handleSolanaVerifySuccess(result)` | both | no post-verify hook runs |
+| `window.startPhantomDeepLink(linkMode, userId)` | picker | the mobile Phantom row is hidden |
+| `parseSolanaError(msg)` | both | the wallet's raw words are shown unmapped |
+| `window.reportWalletFailure(stage, provider, raw, mapped)` | both | **this surface is dark** |
+
+##### `reportWalletFailure`, and why the endpoint is yours
+
+Everything on the wallet surface fails **client-side**: the throw is caught,
+mapped, and painted into a paragraph. Without this call nothing about it exists
+outside the browser — which is how a user whose Phantom held no keypair was told
+to check their USDC balance seven times in one production session (2026-09-06)
+before an operator noticed by hand.
+
+The gem calls it; it does not implement it. **The reporter and its endpoint are
+host-owned because they need an `ErrorLog` this gem cannot assume** — the engine
+here mounts no routes by design, so a gem-side reporter would POST at a path a
+consumer is not guaranteed to have, and a report that 404s silently is strictly
+worse than the silence it replaced: the surface still looks wired. Reference
+implementation in turf-monster: `app/javascript/solana_errors.js`, receiving at
+`POST /auth/solana/report_failure`.
+
+The contract the call sites keep:
+
+- **Called once per caught rejection**, with the stage for that surface —
+  `'wallet_connect'` from the picker, `'web3_step_up'` from the step-up card. A
+  stage the host does not recognise should be recorded, not refused; the report
+  is still worth having.
+- **Both message halves, always.** `raw` is what the wallet said, captured before
+  the mapper runs; `mapped` is what the user read. A **mis-mapping** is invisible
+  in the mapped half alone, and that is the failure the 2026-09-06 incident
+  actually was — a correct mapper meeting a string it had never seen.
+- **Skipped when the error is already tagged `walletFailureReported`.** Set that
+  property on any error your `solanaConnectAndVerify` rethrows after substituting
+  a sentence of your own, and report it from in there, where the wallet's words
+  still exist. Without the tag the same failure files a second row carrying your
+  sentence in both halves — the useless row, and the one an operator meets first.
+- **Fire and forget.** The return value is ignored and a **throw is swallowed**.
+  Do not rely on that: a reporter that throws is a bug, and the guard exists
+  because an observer must never become the incident.
+- **Four values, and only these four.** No signature, no nonce, no signed SIWS
+  message — the modals never hold any of them, so none can leak. `raw` is free
+  text a **wallet** composed, so scrub it **server-side**: a wallet can quote your
+  own nonce back at you inside a field your key allowlist has already approved. A
+  pubkey is fine and should be kept; over-redaction blinds the tool.
+
 #### The signed statement is not configurable
 
 `solana_studio/phantom_deeplink` emits `Studio.wallet_sign_in_statement`, and it

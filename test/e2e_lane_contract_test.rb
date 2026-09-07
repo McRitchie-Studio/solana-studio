@@ -118,6 +118,32 @@ class E2eLaneContractTest < Minitest::Test
     refute_match(/startPhantomDeepLink\s*=/, deeplink_page,
                  "the lab page defines the entry point itself — the specs would then be grading the lab, " \
                  "and every one of them would still pass")
+
+    # The wallet-failure page. Its subject is the two modals' CATCH BLOCKS —
+    # inlined JavaScript inside an x-data attribute, which no Ruby tier can run —
+    # so the whole lane's value rests on those blocks being the gem's own.
+    failure_page = File.read(File.join(ROOT, "test/dummy/app/views/e2e_lab/wallet_failure.html.erb"))
+
+    assert_match(/render\s+["']studio\/modals\/host["']/, failure_page,
+                 "the wallet-failure page must render the ENGINE's real host, not a stand-in")
+    assert_match(/render\s+["']solana_studio\/modals\/wallet_connect["']/, failure_page,
+                 "the wallet-failure page must render the GEM's real picker by name")
+    assert_match(/render\s+["']solana_studio\/modals\/web3_step_up["']/, failure_page,
+                 "the wallet-failure page must render the GEM's real step-up card by name")
+
+    # THE ONE INVERSION THIS PAGE CAN COMMIT, and it would leave every spec in
+    # e2e/wallet_failure_report.spec.js green. The page legitimately DEFINES
+    # window.reportWalletFailure — that global is the HOST's to provide, and the
+    # lab is the host. It must never CALL it: the entire property under test is
+    # that the gem's own catch blocks make that call, with the right stage, both
+    # message halves, once, and without breaking the user when it fails. A lab
+    # that invoked the reporter itself would satisfy all four assertions while
+    # the partials reported nothing at all.
+    calls = failure_page.scan(/window\.reportWalletFailure\s*\(/)
+
+    assert_empty calls,
+                 "the lab page CALLS window.reportWalletFailure — it may only define it. Every " \
+                 "reporting spec would pass over gem call sites that never fired."
   end
 
   # BOTH STATES, on one page. The deep link's absence is half the property under
