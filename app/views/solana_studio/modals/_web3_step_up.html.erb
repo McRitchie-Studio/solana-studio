@@ -69,8 +69,7 @@
 <%
   heading         = local_assigns.fetch(:heading, "Sign in with your wallet")
   subtext         = local_assigns.fetch(:subtext,
-                      "This account is secured by a Solana wallet. You are signed in, but this " \
-                      "session can’t sign on-chain — so on-chain actions still need your wallet.")
+                      "Your account is secured by a Solana wallet.")
   help_url        = local_assigns.fetch(:help_url, "/help")
   help_label      = local_assigns.fetch(:help_label, "Get help")
   picker_modal_id = local_assigns.fetch(:picker_modal_id, "wallet-connect")
@@ -191,9 +190,52 @@
             aria-label="Close">&times;</button>
   </div>
 
-  <%= render "studio/modals/blocks/card_header", icon_emoji: "🔐", title: heading do %>
+  <%# NOT blocks/_card_header, and the reason is a missing slot rather than a
+      preference. That block takes an emoji, a spinner, or one of two fixed
+      icons — there is no slot for a BRAND MARK, and its else-branch paints a
+      green check, so it cannot render this card's icon at all. One card needing
+      a brand header is not yet a primitive: per the modal-lifecycle module the
+      trigger is a second consumer or a third copy, and this is the first. When a
+      second card wants one, add an icon slot to card_header rather than a
+      second hand-rolled header here.
+
+      THE MARK IS THE WALLET, not a padlock. The card is asking the user to reach
+      for a specific object; showing them the object beats a generic security
+      glyph, and where we remember WHICH wallet we show that brand — the same
+      mark the button below carries, so the card names one thing twice rather
+      than two things once. With no remembered brand it falls back to the neutral
+      billfold this file already draws for its no-brand button. %>
+  <div class="text-center mb-4">
+    <template x-if="canOneClick">
+      <span class="inline-flex w-14 h-14 rounded-2xl overflow-hidden items-center justify-center">
+        <svg class="w-14 h-14" aria-hidden="true"><use :href="'#se-wallet-' + provider"></use></svg>
+      </span>
+    </template>
+    <template x-if="!canOneClick">
+      <span class="inline-flex w-14 h-14 rounded-2xl bg-inset items-center justify-center" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" class="w-7 h-7 text-secondary">
+          <rect x="3" y="6.5" width="18" height="11" rx="2.5" />
+          <circle cx="16.6" cy="12" r="1.3" fill="currentColor" stroke="none" />
+        </svg>
+      </span>
+    </template>
+  </div>
+
+  <h3 class="text-heading font-bold text-lg leading-tight text-center mb-2"><%= heading %></h3>
+
+  <%# ONE LINE, plus a second only when we can name the wallet. The previous copy
+      ran four lines explaining that the session cannot sign on-chain — true, and
+      more than a person standing in front of a button needs. The address is the
+      part that earns its place: it is how the user confirms the card is asking
+      for the wallet they think it is, which is why it moved UP here from the
+      footnote under the button. %>
+  <div class="text-center mb-5">
     <p class="text-sm text-body"><%= subtext %></p>
-  <% end %>
+    <template x-if="walletHint">
+      <p class="text-sm text-body mt-1">Please sign in with wallet
+        <span class="font-mono text-secondary" x-text="walletHint"></span></p>
+    </template>
+  </div>
 
   <%# PRIMARY — THE STANDARD WEB3 AUTH BUTTON: a wallet row, not a filled CTA.
       Same shape the connect picker uses — brand mark, the wallet's own name, an
@@ -219,16 +261,6 @@
           </svg>
         </span>
       </button>
-      <%# One line on what pressing it DOES. A signature prompt is alarming
-          without it, and "no funds move" is the difference between clicking and
-          bailing. The address rides here so the user can confirm the card is
-          asking for the wallet they think it is. %>
-      <p class="text-[11px] text-muted mt-1.5 px-1">
-        Signing proves the wallet is yours &mdash; it does not move any funds.
-        <template x-if="walletHint">
-          <span>Wallet <span class="font-mono text-secondary" x-text="walletHint"></span></span>
-        </template>
-      </p>
     </div>
   </template>
 
@@ -264,14 +296,6 @@
     <p role="alert" class="text-red-400 text-sm mt-3 text-center" x-text="error"></p>
   </template>
 
-  <%# SECONDARY — always reachable, so a user whose remembered wallet is the
-      wrong one is never cornered by our memory of it. %>
-  <template x-if="canOneClick">
-    <button type="button" @click="openPicker()" :disabled="connecting"
-            class="mt-3 block w-full text-center text-sm text-secondary hover:text-heading disabled:opacity-50">
-      Use a different wallet
-    </button>
-  </template>
 
   <div class="mt-4 pt-3 border-t border-strong">
     <button type="button" @click="dismiss()" :disabled="connecting"

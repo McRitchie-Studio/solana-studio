@@ -217,6 +217,65 @@ class Web3StepUpModalTest < Minitest::Test
     assert_includes err, %(role="alert")
   end
 
+  # --- the polish pass, 2026-09-06 -------------------------------------------
+  #
+  # NONE of the 17 tests above referenced the lock emoji, the footnote, or the
+  # "Use a different wallet" row. Removing all three left the suite green, which
+  # means the card's most visible surface was unpinned — so these tests are the
+  # ones that would have caught this change, not a record that it happened.
+
+  def test_the_card_leads_with_a_wallet_mark_not_a_padlock
+    html = render_card
+
+    refute_includes html, "\u{1F510}", "a padlock is a security glyph, not the object being asked for"
+    # Remembered brand: the SAME mark the button below carries, so the card
+    # names one wallet twice rather than two things once.
+    assert_includes html, %(<use :href="'#se-wallet-' + provider">),
+                    "with a remembered brand the card shows THAT wallet"
+    # No brand: the neutral billfold this file already draws for its no-brand
+    # button, rather than falling back to card_header's green check.
+    assert_includes html, "canOneClick", "the fallback is chosen client-side, per brand"
+  end
+
+  def test_the_address_line_appears_only_when_there_is_an_address
+    html = render_card
+
+    line = html[/Please sign in with wallet.*?<\/p>/m]
+    assert line, "the card must offer to name the wallet"
+    assert_includes line, %(x-text="walletHint"), "the address itself is the point of the line"
+
+    # CONDITIONAL, and that is the requirement: a card with no remembered wallet
+    # must not print a sentence with a blank where the address goes.
+    guard = html[/<template x-if="walletHint">.*?Please sign in with wallet/m]
+    assert guard, "the line must sit inside an x-if on walletHint"
+  end
+
+  def test_the_body_is_one_line_again
+    html = render_card
+
+    assert_includes html, "Your account is secured by a Solana wallet."
+    # The four-line explanation of why the session cannot sign on-chain was true
+    # and more than someone standing in front of a button needs.
+    refute_includes html, "this session can", "the session-cannot-sign explanation is gone"
+    refute_includes html, "on-chain actions still need your wallet"
+  end
+
+  def test_the_card_runs_from_the_cta_to_not_now
+    html = render_card
+
+    refute_includes html, "Use a different wallet",
+                    "the alternate-wallet row was dropped (operator call)"
+    refute_includes html, "Signing proves the wallet is yours",
+                    "the footnote was dropped; the address moved up into the body"
+  end
+
+  def test_the_body_is_spaced_off_the_cta
+    # Without this the copy sits flush against the button it is explaining.
+    body = render_card[/<div class="text-center mb-5">/]
+
+    assert body, "the body block must carry its own bottom margin"
+  end
+
   private
 
   def render_card(**locals)
