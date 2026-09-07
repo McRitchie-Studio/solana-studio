@@ -263,9 +263,15 @@
     <p class="text-sm text-body"><%= subtext %></p>
     <template x-if="walletHint">
       <p class="text-sm text-body mt-1">Please sign in with wallet
-        <span class="font-mono text-secondary" x-text="walletHint"></span>
-        <button type="button" @click="openPicker()" :disabled="connecting" x-show="canOneClick"
-                class="ml-1 text-xs text-muted underline hover:text-secondary disabled:opacity-50">Not your wallet?</button></p>
+        <%# BESIDE the address, and the nowrap is what keeps it there. Without it
+            the link wraps onto a line of its own, centred under the sentence —
+            which is visually the row this replaced, at a smaller size. The group
+            breaks as ONE unit, so a narrow card moves the address and the link
+            down together instead of splitting them. %>
+        <span class="whitespace-nowrap"><span class="font-mono text-secondary"
+              x-text="walletHint"></span><button type="button" @click="openPicker()"
+              :disabled="connecting" x-show="canOneClick"
+              class="ml-1 text-xs text-muted underline hover:text-secondary disabled:opacity-50">Not your wallet?</button></span></p>
     </template>
   </div>
 

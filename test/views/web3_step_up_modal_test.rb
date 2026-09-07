@@ -330,8 +330,16 @@ class Web3StepUpModalTest < Minitest::Test
 
     assert guarded, "the correction link lives in the block with the address it corrects"
 
-    address = guarded.at_css("span[x-text='walletHint']")
-    link    = guarded.at_css("button")
+    # BESIDE the address, not under it. They share one nowrap group so a narrow
+    # card moves them down TOGETHER; split them and the link wraps onto a line of
+    # its own, centred, which is visually the full-width row this replaced at a
+    # smaller size. Measured in Chromium at 320/390/1440 before this assertion
+    # existed: without the group the link wrapped at every width.
+    group = guarded.at_css("span.whitespace-nowrap")
+    assert group, "the address and its link must break as ONE unit"
+
+    address = group.at_css("span[x-text='walletHint']")
+    link    = group.at_css("button")
 
     assert address, "the address itself"
     assert link, "...and a way to say it is the wrong one"
