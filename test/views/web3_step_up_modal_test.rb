@@ -382,6 +382,51 @@ class Web3StepUpModalTest < Minitest::Test
                     "the margin is on the block holding the copy, not on an empty neighbour"
   end
 
+  # ── reporting a caught wallet failure ──────────────────────────────────────
+  #
+  # THE STRUCTURAL HALF. See the same section in wallet_connect_picker_test.rb:
+  # these prove the call shipped, never that the branch behaves.
+  # e2e/wallet_failure_report.spec.js is the mutation-proven authority.
+  def test_a_caught_failure_is_reported_with_this_surfaces_stage
+    xd = x_data(render_card)
+
+    assert_includes xd, "window.reportWalletFailure('web3_step_up', name, raw, msg)",
+                    "the step-up card no longer reports its rejections, or sends a stage the " \
+                    "host's server maps to `unknown`"
+    refute_includes xd, "'wallet_connect', name, raw, msg",
+                    "this card is reporting the PICKER's stage — the two surfaces need different " \
+                    "answers from an operator, which is why they are different filters"
+  end
+
+  def test_the_reported_pair_is_the_wallets_words_and_the_users
+    xd = x_data(render_card)
+
+    assert_includes xd, "var raw = (e && e.message) || '';"
+    assert_includes xd, "var msg = (e && e.code === 4001) ? 'Signature rejected' : (raw || 'Connection failed');",
+                    "the mapper no longer reads the captured raw string, so the two halves can drift"
+  end
+
+  def test_the_report_cannot_wedge_the_card
+    # THE ORDER IS THE PROPERTY HERE, and it is specific to this file: this card
+    # clears `connecting` OUTSIDE its catch block, so a throw from a host's
+    # reporter would skip that line and leave the sign-in button disabled forever
+    # with an error the user cannot retry. Alpine swallows a throw out of an async
+    # handler, so nothing would say so.
+    xd = x_data(render_card)
+
+    assert_includes xd, "try { window.reportWalletFailure",
+                    "the report is unguarded, and this card clears `connecting` outside the catch"
+
+    # The report must come AFTER the user has been served, not before it.
+    assert_operator xd.index("this.error = msg;"), :<,
+                    xd.index("window.reportWalletFailure('web3_step_up'"),
+                    "observation runs before the user is handed their error — it may not delay, " \
+                    "block or alter that line"
+
+    assert_includes xd, "typeof window.reportWalletFailure === 'function'"
+    assert_includes xd, "!(e && e.walletFailureReported)"
+  end
+
   private
 
   def render_card(**locals)
