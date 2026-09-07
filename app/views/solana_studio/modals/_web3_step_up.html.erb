@@ -27,9 +27,13 @@
     help_url        — the escape hatch for a user who cannot reach their wallet
                       (default "/help"). Set to nil to drop the line entirely.
     help_label      — (default "Get help")
-    picker_modal_id — the host's brand picker, reached by "Use a different
-                      wallet" (default "wallet-connect"). The picker is expected
-                      to honour a `backTo` prop pointing back at this card.
+    picker_modal_id — the host's brand picker (default "wallet-connect"). ONE
+                      route reaches it: the no-remembered-brand button below,
+                      which IS the picker's opener. (The "Use a different
+                      wallet" row that used to be the second route was dropped
+                      on 2026-09-06; see the header comment on the CTA.) The
+                      picker is expected to honour a `backTo` prop pointing
+                      back at this card.
     modal_id        — this card's own id, passed to the picker as backTo
                       (default "web3-step-up")
     modal_store     — Alpine store name (default "modals"; the living style
@@ -82,9 +86,12 @@
        connecting: false,
        error: '',
        // Set when the remembered wallet turns out not to be reachable in THIS
-       // browser (a different machine, the extension removed). It flips the card
-       // to the picker rather than leaving the user pressing a button that
-       // cannot work.
+       // browser (a different machine, the extension removed). WRITTEN IN ONE
+       // PLACE ONLY — inside signIn(), after the reachable() guard — so it
+       // never pre-empts: init(), refresh() and the poll below all leave it
+       // alone. The user presses the brand button, reads the error, and only
+       // THEN does the card fall back to the no-brand row. That row is the
+       // BUTTON that opens the picker, not the picker itself.
        providerMissing: false,
        // Which wallets this document can actually see. Read on a poll, NOT once
        // at mount: wallet provider registration fills in asynchronously, and
@@ -193,7 +200,10 @@
   <%# NOT blocks/_card_header, and the reason is a missing slot rather than a
       preference. That block takes an emoji, a spinner, or one of two fixed
       icons — there is no slot for a BRAND MARK, and its else-branch paints a
-      green check, so it cannot render this card's icon at all. One card needing
+      CHECK MARK tinted with the theme's own primary token (_card_header.html.erb
+      :63-64 draws bg-<icon_color>/15 with icon_color defaulting to 'primary';
+      the colour follows the host's theme and is green only where primary is).
+      Either way it cannot render this card's icon at all. One card needing
       a brand header is not yet a primitive: per the modal-lifecycle module the
       trigger is a second consumer or a third copy, and this is the first. When a
       second card wants one, add an icon slot to card_header rather than a
