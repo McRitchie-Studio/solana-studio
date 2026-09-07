@@ -217,6 +217,171 @@ class Web3StepUpModalTest < Minitest::Test
     assert_includes err, %(role="alert")
   end
 
+  # --- the polish pass, 2026-09-06 -------------------------------------------
+  #
+  # NONE of the 17 tests above referenced the lock emoji, the footnote, or the
+  # "Use a different wallet" row. Removing all three left the suite green, which
+  # means the card's most visible surface was unpinned — so these tests are the
+  # ones that would have caught this change, not a record that it happened.
+  #
+  # THE FIRST VERSION OF THIS SECTION WAS INERT, and it is written down here
+  # because the failure mode is invisible from inside the file. Those tests
+  # asserted `'#se-wallet-' + provider` and `canOneClick` against the WHOLE
+  # rendered card, and both strings already lived elsewhere in it — the first in
+  # the 36px CTA row, the second in the x-data getter. Deleting the entire brand
+  # header left the suite at 22 runs / 118 assertions / 0 failures while a probe
+  # confirmed the header was gone from the HTML. Six of nine mutants survived.
+  #
+  # The fix is STRUCTURAL, not a longer string: `brand_header` is the block
+  # immediately ABOVE the heading and `header_branch` is one x-if branch of it,
+  # so no assertion below can be satisfied by markup somewhere else in the card.
+  # `test_the_header_slice_can_come_up_empty` is the control that keeps that
+  # true — without it every assertion here would pass vacuously against a slice
+  # that had silently stopped finding anything.
+
+  def test_the_header_slice_can_come_up_empty
+    # THE CONTROL. Strip the header out of the rendered card and the slice must
+    # stop finding a brand branch. If this test goes green with the strip
+    # removed, `brand_header` is reading something that is not the header and
+    # the two tests below are free.
+    html     = render_card
+    beheaded = html.sub(%r{<div class="text-center mb-4">.*?</div>\s*}m, "")
+
+    refute_equal html, beheaded, "control: the header must be findable before it can be removed"
+    assert_nil header_branch(brand_header(beheaded), "canOneClick"),
+               "with the header stripped the slice must find no remembered-brand branch"
+    assert_nil header_branch(brand_header(beheaded), "!canOneClick"),
+               "...nor a no-brand one"
+    # ...and the CTA row, which carries the same sprite binding, is STILL there —
+    # so what the control proves is that the slice ignores it, not that the
+    # string vanished from the document.
+    assert_includes beheaded, "'#se-wallet-' + provider"
+  end
+
+  def test_the_card_leads_with_a_wallet_mark_not_a_padlock
+    html   = render_card
+    header = brand_header(html)
+
+    assert header, "the card must LEAD with a block of its own, above the heading"
+
+    # A padlock is a security glyph, not the object being asked for. Refuted in
+    # BOTH forms: `&#128274;` renders identically to the literal codepoint and
+    # sails straight past a codepoint-only assertion.
+    refute_includes html, "\u{1F510}"
+    refute_includes html, "&#128274;"
+
+    # Remembered brand: THAT wallet's mark, at header size. The size is part of
+    # the assertion because the CTA row below paints the same sprite at w-9 —
+    # an assertion that ignores it is satisfied by the button.
+    remembered = header_branch(header, "canOneClick")
+    assert remembered, "the remembered-brand half of the header must ship"
+    assert_includes remembered, "'#se-wallet-' + provider",
+                    "bound to the prop, never to one hardcoded brand"
+    assert_includes remembered, "w-14 h-14", "and drawn at header size, not the button's"
+
+    # No remembered brand: the neutral billfold this file already draws for its
+    # no-brand button, rather than card_header's tinted check.
+    fallback = header_branch(header, "!canOneClick")
+    assert fallback, "the no-brand half of the header must ship too"
+    assert_includes fallback, "w-7 h-7 text-secondary", "the neutral billfold, on theme tokens"
+    refute_includes fallback, "se-wallet-",
+                    "the no-brand branch has no brand to paint — a swap of the two puts one here"
+  end
+
+  def test_the_address_line_appears_only_when_there_is_an_address
+    body = body_block(render_card)
+
+    assert body, "the card must carry a body block under the heading"
+
+    guarded = body.css("template").find { |t| t["x-if"] == "walletHint" }
+    assert guarded, "the address line must sit inside an x-if on walletHint"
+    assert_includes guarded.inner_html, "Please sign in with wallet"
+    assert_includes guarded.inner_html, %(x-text="walletHint"),
+                    "the address itself is the point of the line"
+
+    # CONDITIONAL, and that is the requirement: a card with no remembered wallet
+    # must not print a sentence with a blank where the address goes. Asserted by
+    # REMOVING every template from the body and reading what is left, so a
+    # second unconditional copy is caught as well as a dropped guard.
+    unguarded = body.dup
+    unguarded.css("template").each(&:remove)
+    refute_includes unguarded.inner_html, "Please sign in with wallet"
+    refute_includes unguarded.inner_html, "walletHint"
+  end
+
+  def test_the_body_is_one_line_again
+    html = render_card
+
+    assert_includes body_block(html).inner_html, "Your account is secured by a Solana wallet."
+    # The four-line explanation of why the session cannot sign on-chain was true
+    # and more than someone standing in front of a button needs.
+    refute_includes html, "this session can", "the session-cannot-sign explanation is gone"
+    refute_includes html, "on-chain actions still need your wallet"
+  end
+
+  def test_the_wrong_wallet_is_correctable_from_the_address_line
+    # Naming the wallet makes a mismatch VISIBLE without making it ACTIONABLE,
+    # which is worse than not naming it. The link is what closes that gap.
+    #
+    # THE LINK AND THE ADDRESS ARE ASSERTED SEPARATELY, deliberately: they share
+    # one block now, and an assertion that matches the block as a whole cannot
+    # say which half broke — the same shape as the inert-header bug above.
+    guarded = address_block(render_card)
+
+    assert guarded, "the correction link lives in the block with the address it corrects"
+
+    # BESIDE the address, not under it. They share one nowrap group so a narrow
+    # card moves them down TOGETHER; split them and the link wraps onto a line of
+    # its own, centred, which is visually the full-width row this replaced at a
+    # smaller size. Measured in Chromium at 320/390/1440 before this assertion
+    # existed: without the group the link wrapped at every width.
+    group = guarded.at_css("span.whitespace-nowrap")
+    assert group, "the address and its link must break as ONE unit"
+
+    address = group.at_css("span[x-text='walletHint']")
+    link    = group.at_css("button")
+
+    assert address, "the address itself"
+    assert link, "...and a way to say it is the wrong one"
+
+    assert_equal "Not your wallet?", link.text.strip
+    assert_equal "openPicker()", link["@click"],
+                 "the same handler the dropped full-width row used, so the picker wiring is unchanged"
+    assert_equal "canOneClick", link["x-show"],
+                 "hidden when the PRIMARY button is already the picker, or it competes with the " \
+                 "one action this card exists to offer"
+  end
+
+  def test_the_card_runs_from_the_cta_to_not_now
+    html = render_card
+
+    refute_includes html, "Use a different wallet",
+                    "the alternate-wallet row was dropped (operator call)"
+    refute_includes html, "Signing proves the wallet is yours",
+                    "the footnote was dropped; the address moved up into the body"
+
+    # ...and what replaced the row is a LINK inside the body, never a second
+    # full-width row. The card still runs CTA -> Not now.
+    link = address_block(html).at_css("button")
+    refute_includes link["class"].to_s.split, "w-full",
+                    "the correction path must not become the row it replaced"
+  end
+
+  def test_the_body_block_carries_the_margin_that_used_to_be_an_accident
+    # Not a taste change. The old callsite passed a BLOCK to card_header, which
+    # wraps `yield` in a <p> of its own, so the card emitted <p><p> and the
+    # parser auto-closed it into a stray EMPTY paragraph — and that empty
+    # paragraph was the body-to-CTA gap. Hand-rolling the header removed it, so
+    # the margin has to be declared. Asserted on the block that HOLDS the copy:
+    # an mb-5 that drifts onto an empty neighbour restores the old accident.
+    body = body_block(render_card)
+
+    assert body, "the body copy must sit in a block of its own"
+    assert_includes body["class"].to_s.split, "mb-5", "that block carries the bottom margin"
+    assert_includes body.inner_html, "Your account is secured by a Solana wallet.",
+                    "the margin is on the block holding the copy, not on an empty neighbour"
+  end
+
   private
 
   def render_card(**locals)
@@ -225,5 +390,34 @@ class Web3StepUpModalTest < Minitest::Test
 
   def x_data(html)
     html[/x-data="(.*?)"\s*\n?\s*class=/m, 1].to_s
+  end
+
+  # THE BRAND HEADER, sliced STRUCTURALLY: the element immediately above the
+  # heading. Not by class, because a class-matched slice makes the mark tests
+  # fail for a margin edit; not by string, because the strings the header emits
+  # are the CTA row's strings too. "The block the card leads with" is also the
+  # claim being tested, so the slice and the acceptance criterion are the same
+  # sentence. Returns a Nokogiri node, or nil when nothing precedes the heading.
+  def brand_header(html)
+    Nokogiri::HTML5.fragment(html).at_css("h3")&.previous_element
+  end
+
+  # The body copy block: the element immediately BELOW the heading.
+  def body_block(html)
+    Nokogiri::HTML5.fragment(html).at_css("h3")&.next_element
+  end
+
+  # The address line's own block: the x-if that guards it, as a node. The
+  # address and its correction link share it, so tests slice it once and assert
+  # on the two children separately.
+  def address_block(html)
+    body_block(html)&.css("template")&.find { |t| t["x-if"] == "walletHint" }
+  end
+
+  # One x-if branch of a sliced block, as raw HTML. Matched on the GUARD, so
+  # swapping the two branches moves the markup to the other guard and every
+  # assertion about it fails — a slice keyed on position alone cannot see that.
+  def header_branch(node, guard)
+    node&.css("template")&.find { |t| t["x-if"] == guard }&.inner_html
   end
 end
