@@ -204,10 +204,11 @@
   <%# NOT blocks/_card_header, and the reason is a missing slot rather than a
       preference. That block takes an emoji, a spinner, or one of two fixed
       icons — there is no slot for a BRAND MARK, and its else-branch paints a
-      CHECK MARK tinted with the theme's own primary token (_card_header.html.erb
-      :63-64 draws bg-<icon_color>/15 with icon_color defaulting to 'primary';
-      the colour follows the host's theme and is green only where primary is).
-      Either way it cannot render this card's icon at all. One card needing
+      CHECK MARK tinted with the theme's own primary token: line 63-64 of
+      _card_header.html.erb draws bg-<icon_color>/15 with icon_color defaulting
+      to 'primary', so the colour follows the host's theme and is green only
+      where primary is. Either way it cannot render this card's icon at all,
+      which is the point. One card needing
       a brand header is not yet a primitive: per the modal-lifecycle module the
       trigger is a second consumer or a third copy, and this is the first. When a
       second card wants one, add an icon slot to card_header rather than a
