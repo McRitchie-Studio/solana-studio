@@ -1,0 +1,93 @@
+<%# The two SHIPPED wallet modals, rendered through the engine's real modal host,
+    so a real browser can drive their real catch blocks.
+
+    BOTH partials by name. Nothing here restates what either does — the catch
+    block, the mapper call, the `typeof` guard and the try/catch around the
+    report are all the gem's, and they are the entire subject of the specs. A
+    page that hand-rolled any of it would leave the specs grading the lab.
+
+    WHAT THE SCRIPT BELOW SUPPLIES IS THE HOST'S HALF, and every line of it is a
+    global this gem does NOT ship: window.walletProvider and
+    window.solanaConnectAndVerify are turf-monster's wallet_provider.js,
+    parseSolanaError and reportWalletFailure are its solana_errors.js. The gem's
+    whole shipped JavaScript tree is one file (network_guard.js) and it defines
+    none of them. The lab is the host here, so the lab provides them — the same
+    relationship /lab/modal has to Solana::Network.describe.
+
+    STAND-INS SHAPED FROM THE SHIPPED ARTICLE, not from what makes a spec pass.
+    parseSolanaError below carries ONE real rule copied verbatim out of
+    turf-monster's mapper — the insufficient-funds pair — because a stub shaped
+    to suit the test certifies the test. That pair is also the incident: a
+    correct mapper meeting a wallet string it had never seen is how an empty
+    Phantom was answered with balance advice seven times in one production
+    session on 2026-09-06. %>
+<main data-test="wallet-failure-lab">
+  <%= render "studio/modals/host" do %>
+    <template x-if="$store.modals.current().id === 'wallet-connect'">
+      <%= render "solana_studio/modals/wallet_connect" %>
+    </template>
+    <template x-if="$store.modals.current().id === 'web3-step-up'">
+      <%= render "solana_studio/modals/web3_step_up" %>
+    </template>
+  <% end %>
+</main>
+
+<script>
+  // What the wallet will refuse with. A spec sets this, so the error the gem
+  // catches is a real rejected promise from the real call site rather than
+  // something the page handed the partial directly.
+  window.labRejectWith = null;
+
+  // Every report the gem made, in order. A spec asserts on LENGTH as well as
+  // content: "reported once" and "reported twice" are different outcomes and the
+  // upstream-dedupe guard is the difference between them.
+  window.labReports = [];
+
+  window.reportWalletFailure = function (stage, provider, raw, mapped) {
+    window.labReports.push({
+      stage: stage,
+      provider: provider,
+      raw: raw,
+      mapped: mapped,
+      // The gem must pass FOUR values and add nothing of its own. `opts`,
+      // `verifyArgs()` and `this.props` are all in scope at the wallet-connect
+      // call site and carry currentUserId; a fifth argument would mean one of
+      // them leaked into an error log.
+      arity: arguments.length
+    });
+  };
+
+  // ONE rule, copied verbatim from turf-monster app/javascript/solana_errors.js.
+  // Enough to make `raw` and `mapped` genuinely DIFFERENT strings, which is the
+  // property the reporting exists to preserve.
+  window.parseSolanaError = function (msg) {
+    if (/insufficient funds/i.test(msg)) {
+      return 'Insufficient USDC balance. Top up your wallet via the Faucet.';
+    }
+    return msg;
+  };
+
+  window.walletProvider = {
+    available: function () { return [{ name: 'Phantom' }]; },
+    get: function (name) { return name === 'Phantom' ? { name: 'Phantom' } : null; },
+    isMobile: function () { return false; }
+  };
+
+  // Rejects, always — this lab exists for the failure path. A REAL rejected
+  // promise from the real await, so the gem's own catch block is what runs.
+  window.solanaConnectAndVerify = function () {
+    return Promise.reject(window.labRejectWith || new Error('lab: no rejection configured'));
+  };
+
+  window.labOpenPicker = function () {
+    window.Alpine.store('modals').open('wallet-connect', {});
+  };
+
+  window.labOpenStepUp = function () {
+    window.Alpine.store('modals').open('web3-step-up', {
+      provider: 'Phantom',
+      providerLabel: 'Phantom',
+      walletHint: 'ABCD…4321'
+    });
+  };
+</script>

@@ -76,6 +76,42 @@
                          browser, or to do something else entirely. The default
                          calls window.startPhantomDeepLink(linkMode, userId).
     onBack()             the Back button; DEFAULT closes the modal
+
+  CONTRACT WITH THE HOST'S JS. This gem ships one JavaScript file
+  (solana_studio/network_guard.js) and no routes at all, so every global below is
+  the HOST'S to provide. Each is reached behind a `typeof` guard, and an absent
+  one degrades this card rather than breaking it — which is the whole reason the
+  list is written down here instead of being rediscovered per consumer.
+
+    window[connect_fn]              REQUIRED. Connect + verify. Default
+                                    window.solanaConnectAndVerify.
+    window.walletProvider           REQUIRED for the rows: .available() lists the
+                                    detected wallets this card paints.
+    parseSolanaError(msg)           optional. Maps a wallet string to a sentence
+                                    a user can act on; absent means the wallet's
+                                    own words are shown unmapped.
+    window.handleSolanaVerifySuccess(result)
+                                    optional. Post-verify hook on the happy path.
+    window.startPhantomDeepLink(linkMode, userId)
+                                    optional. The mobile deep link; absent hides
+                                    the Phantom deep-link row entirely.
+    window.reportWalletFailure(stage, provider, raw, mapped)
+                                    optional. Fire-and-forget observation, called
+                                    ONCE per caught rejection with stage
+                                    'wallet_connect'. `raw` is what the wallet
+                                    said and `mapped` is what the user was shown;
+                                    a host that records only one half cannot
+                                    diagnose a MIS-mapping, which is the failure
+                                    this exists for. Return value is ignored and
+                                    a throw is swallowed — see the call site.
+                                    Absent means this surface is DARK: the user
+                                    is served correctly and nothing is recorded
+                                    anywhere. Reference implementation and the
+                                    receiving endpoint (both host-owned, because
+                                    they need an ErrorLog this gem cannot assume)
+                                    live in turf-monster:
+                                    app/javascript/solana_errors.js and
+                                    POST /auth/solana/report_failure.
 %>
 <%
   store      = local_assigns.fetch(:store, "modals")
@@ -195,9 +231,46 @@
              this.connecting = false; this.picking = '';
            }
          } catch (e) {
-           var msg = (e && e.code === 4001) ? 'Signature rejected' : ((e && e.message) || 'Connection failed');
+           // BOTH HALVES OR NEITHER. raw is what the WALLET said, captured
+           // before the mapper runs; msg is what the user reads. A mis-mapping
+           // is invisible in the mapped half alone, and that is not theoretical
+           // -- a correct mapper meeting a string it had never seen is how an
+           // empty Phantom came to be answered with balance advice seven times
+           // in one production session on 2026-09-06.
+           var raw = (e && e.message) || '';
+           var msg = (e && e.code === 4001) ? 'Signature rejected' : (raw || 'Connection failed');
            if (typeof parseSolanaError === 'function') msg = parseSolanaError(msg);
            this.error = msg; this.connecting = false; this.picking = '';
+           // ── OBSERVATION, AFTER THE USER HAS BEEN SERVED ──────────────────
+           //
+           // Deliberately the LAST statement in this block, and the three lines
+           // above are deliberately not in it: reporting may not delay, block or
+           // alter the line the user has just been handed.
+           //
+           // HOST-SUPPLIED, like every other global this partial reaches for
+           // (see CONTRACT WITH THE HOST'S JS in the header). The endpoint it
+           // posts to writes an ErrorLog, which is host-owned -- this gem ships
+           // no routes at all -- so a consumer that has not built one simply
+           // does not define this, the guard is false, and the card behaves
+           // exactly as it did before. Silence, never a 404.
+           //
+           // ALREADY REPORTED UPSTREAM? The connect helper substitutes its own
+           // sentence for an unusable wallet and reports the pair from in there,
+           // where the wallet's words still exist. Reporting again from out here
+           // would add a second row whose raw and mapped are BOTH our sentence
+           // -- the useless row, and the one an operator meets first.
+           //
+           // THE try/catch IS THIS GEM'S OWN LAYER, and it is not redundant with
+           // the reporter's. We do not own the reporter -- a host does, and a
+           // host's implementation may throw. A throw here escapes an async Alpine
+           // handler silently, which is the failure mode this whole feature
+           // exists to remove -- so the observation cannot be allowed to become
+           // the incident. Four values, and only these four: opts,
+           // verifyArgs() and this.props are all in scope and carry
+           // currentUserId, none of which belongs in an error log.
+           if (typeof window.reportWalletFailure === 'function' && !(e && e.walletFailureReported)) {
+             try { window.reportWalletFailure('wallet_connect', name, raw, msg); } catch (_e) {}
+           }
          }
        },
        deepLink() {

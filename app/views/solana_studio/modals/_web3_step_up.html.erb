@@ -64,6 +64,19 @@
   you into that wallet's account, exactly as a standalone wallet button does. The
   walletHint is shown precisely so that is a visible choice, not a surprise.
 
+  Two more host globals, both OPTIONAL and both reached behind a `typeof` guard:
+  `parseSolanaError(msg)` maps a wallet string to a sentence a user can act on,
+  and `window.reportWalletFailure(stage, provider, raw, mapped)` records a caught
+  rejection with stage 'web3_step_up'. The reporter is fire-and-forget — its
+  return value is ignored and a throw is swallowed — and it is called ONCE per
+  rejection, skipping any error solanaConnectAndVerify already reported upstream.
+  Send BOTH message halves: `raw` is what the wallet said, `mapped` is what the
+  user read, and only the pair makes a MIS-mapping diagnosable. A host that
+  defines neither gets this card exactly as it behaved before, with the failure
+  recorded nowhere. The reporter and its endpoint stay host-owned because they
+  need an ErrorLog this gem cannot assume — reference implementation in
+  turf-monster: app/javascript/solana_errors.js, POST /auth/solana/report_failure.
+
   CRITICAL (Alpine): this partial is cloned from a <template x-if> by the modal
   host, so it must have ONE root element, and the x-data below is a
   DOUBLE-QUOTED attribute — a single " anywhere inside it (a code comment
@@ -167,9 +180,38 @@
            }
            this.error = (result && result.error) || 'Verification failed.';
          } catch (e) {
-           var msg = (e && e.code === 4001) ? 'Signature rejected' : ((e && e.message) || 'Connection failed');
+           // BOTH HALVES OR NEITHER. raw is what the WALLET said, captured
+           // before the mapper runs; msg is what the user reads. A mis-mapping
+           // is invisible in the mapped half alone -- a correct mapper meeting a
+           // string it had never seen is how an empty Phantom came to be
+           // answered with balance advice seven times in one production session
+           // on 2026-09-06, which is the incident this reporting exists for.
+           var raw = (e && e.message) || '';
+           var msg = (e && e.code === 4001) ? 'Signature rejected' : (raw || 'Connection failed');
            if (typeof parseSolanaError === 'function') msg = parseSolanaError(msg);
            this.error = msg;
+           // Observation, LAST and after the user has been served. Host-supplied
+           // like every other global here (see CONTRACT WITH THE HOST'S JS in
+           // the header): the endpoint it posts to writes an ErrorLog, which is
+           // host-owned -- this gem ships no routes -- so a consumer that built
+           // none simply leaves this undefined and the card behaves exactly as
+           // before. The walletFailureReported tag means solanaConnectAndVerify
+           // already reported this one from where the wallet's words still
+           // existed; reporting again would file a second row carrying OUR
+           // sentence in both halves, and that is the row an operator meets
+           // first. Sibling call site in modals/_wallet_connect carries the long
+           // form of both arguments.
+           //
+           // THE try/catch IS LOAD-BEARING HERE IN A WAY IT IS NOT THERE.
+           // this.connecting = false sits OUTSIDE this catch block, on the
+           // line below. A host reporter that throws would skip it, leaving the
+           // sign-in button disabled forever with an error the user cannot
+           // retry -- and Alpine swallows a throw out of an async handler, so
+           // nothing anywhere would say so. An observer that can wedge the card
+           // is a worse bug than the darkness it was added to fix.
+           if (typeof window.reportWalletFailure === 'function' && !(e && e.walletFailureReported)) {
+             try { window.reportWalletFailure('web3_step_up', name, raw, msg); } catch (_e) {}
+           }
          }
          this.connecting = false;
        },
@@ -281,7 +323,7 @@
       Installed badge, chevron — so a wallet reads identically everywhere it is
       offered and this card does not invent a third look for one action.
 
-      It carries `pulse-cta` (engine-motion) because it is the ONE target on the
+      It carries pulse-cta (engine-motion) because it is the ONE target on the
       card and the whole point of the card is that the user should press it. %>
   <template x-if="canOneClick">
     <div>

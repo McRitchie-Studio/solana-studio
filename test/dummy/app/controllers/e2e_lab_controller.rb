@@ -49,4 +49,12 @@ class E2eLabController < ActionController::Base
   def phantom_deeplink
     @network_json = Solana::Network.describe(LAB_CLUSTER, environment: LAB_ENVIRONMENT).to_json
   end
+
+  # The two wallet modals' FAILURE path. No ivar and no locals of its own: both
+  # partials take every input through local_assigns.fetch and read the rest off
+  # the modal store's props, so the page's whole job is to render them by name
+  # and supply the host globals they reach for. See the view.
+  def wallet_failure
+    @network_json = Solana::Network.describe(LAB_CLUSTER, environment: LAB_ENVIRONMENT).to_json
+  end
 end

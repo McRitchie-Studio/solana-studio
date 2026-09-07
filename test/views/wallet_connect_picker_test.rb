@@ -238,6 +238,51 @@ class WalletConnectPickerTest < Minitest::Test
     assert_includes err, %(role="alert")
   end
 
+  # ── reporting a caught wallet failure ──────────────────────────────────────
+  #
+  # THE STRUCTURAL HALF, AND IT IS LABELLED THAT WAY ON PURPOSE. These are string
+  # assertions over a rendered attribute: they prove the call SHIPPED with the
+  # right stage and both guards around it. They cannot prove the branch behaves —
+  # a negated guard renders the same characters — and this ecosystem measured
+  # exactly that on 2026-09-06, 25 source-text mutants with 10 survivors.
+  # e2e/wallet_failure_report.spec.js is the authority on behaviour and is
+  # mutation-proven; this exists because that lane is a SEPARATE CI job and the
+  # ordinary suite would otherwise pin none of this.
+  def test_a_caught_failure_is_reported_with_this_surfaces_stage
+    xd = x_data(render_picker)
+
+    assert_includes xd, "window.reportWalletFailure('wallet_connect', name, raw, msg)",
+                    "the picker no longer reports its rejections, or reports them with a stage " \
+                    "the host's server maps to `unknown` — the one field triage filters on"
+  end
+
+  def test_the_reported_pair_is_the_wallets_words_and_the_users
+    # BOTH HALVES, pinned as the two separate bindings they are. `raw` must be
+    # taken from the error BEFORE the mapper runs — a mis-mapping is invisible in
+    # the mapped half alone, which is the whole diagnostic value of the call.
+    xd = x_data(render_picker)
+
+    assert_includes xd, "var raw = (e && e.message) || '';"
+    assert_includes xd, "var msg = (e && e.code === 4001) ? 'Signature rejected' : (raw || 'Connection failed');",
+                    "the mapper no longer reads the captured raw string, so the two halves can drift"
+  end
+
+  def test_reporting_is_optional_and_cannot_break_the_user
+    # THREE guards, asserted separately because each covers a different failure
+    # and a single assertion over the whole line cannot say which one went.
+    xd = x_data(render_picker)
+
+    assert_includes xd, "typeof window.reportWalletFailure === 'function'",
+                    "a host that never defined the reporter would now hit a TypeError inside an " \
+                    "Alpine handler, which is silent"
+    assert_includes xd, "!(e && e.walletFailureReported)",
+                    "an error the host already reported upstream would be filed a second time, " \
+                    "carrying the host's own sentence in BOTH halves"
+    assert_includes xd, "try { window.reportWalletFailure",
+                    "the reporter is the HOST's, and a host implementation that throws must not " \
+                    "escape into the user's path"
+  end
+
   private
 
   def render_picker(**locals)
