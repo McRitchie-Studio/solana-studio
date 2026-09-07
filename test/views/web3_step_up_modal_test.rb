@@ -319,6 +319,31 @@ class Web3StepUpModalTest < Minitest::Test
     refute_includes html, "on-chain actions still need your wallet"
   end
 
+  def test_the_wrong_wallet_is_correctable_from_the_address_line
+    # Naming the wallet makes a mismatch VISIBLE without making it ACTIONABLE,
+    # which is worse than not naming it. The link is what closes that gap.
+    #
+    # THE LINK AND THE ADDRESS ARE ASSERTED SEPARATELY, deliberately: they share
+    # one block now, and an assertion that matches the block as a whole cannot
+    # say which half broke — the same shape as the inert-header bug above.
+    guarded = address_block(render_card)
+
+    assert guarded, "the correction link lives in the block with the address it corrects"
+
+    address = guarded.at_css("span[x-text='walletHint']")
+    link    = guarded.at_css("button")
+
+    assert address, "the address itself"
+    assert link, "...and a way to say it is the wrong one"
+
+    assert_equal "Not your wallet?", link.text.strip
+    assert_equal "openPicker()", link["@click"],
+                 "the same handler the dropped full-width row used, so the picker wiring is unchanged"
+    assert_equal "canOneClick", link["x-show"],
+                 "hidden when the PRIMARY button is already the picker, or it competes with the " \
+                 "one action this card exists to offer"
+  end
+
   def test_the_card_runs_from_the_cta_to_not_now
     html = render_card
 
@@ -326,6 +351,12 @@ class Web3StepUpModalTest < Minitest::Test
                     "the alternate-wallet row was dropped (operator call)"
     refute_includes html, "Signing proves the wallet is yours",
                     "the footnote was dropped; the address moved up into the body"
+
+    # ...and what replaced the row is a LINK inside the body, never a second
+    # full-width row. The card still runs CTA -> Not now.
+    link = address_block(html).at_css("button")
+    refute_includes link["class"].to_s.split, "w-full",
+                    "the correction path must not become the row it replaced"
   end
 
   def test_the_body_block_carries_the_margin_that_used_to_be_an_accident
@@ -366,6 +397,13 @@ class Web3StepUpModalTest < Minitest::Test
   # The body copy block: the element immediately BELOW the heading.
   def body_block(html)
     Nokogiri::HTML5.fragment(html).at_css("h3")&.next_element
+  end
+
+  # The address line's own block: the x-if that guards it, as a node. The
+  # address and its correction link share it, so tests slice it once and assert
+  # on the two children separately.
+  def address_block(html)
+    body_block(html)&.css("template")&.find { |t| t["x-if"] == "walletHint" }
   end
 
   # One x-if branch of a sliced block, as raw HTML. Matched on the GUARD, so
