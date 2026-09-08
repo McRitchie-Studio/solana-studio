@@ -47,7 +47,10 @@ class WalletTransportJsTest < Minitest::Test
   end
 
   def setup
-    skip "node not available" unless self.class.node?
+    # FAILS rather than skips, matching network_guard_js_test.rb. A skipped JS
+    # lane is lost coverage that reads as green, and bin/release-check rejects a
+    # skipped file for the same reason.
+    assert self.class.node?, "node is required to run this suite (install node)"
   end
 
   # --- base58 --------------------------------------------------------------

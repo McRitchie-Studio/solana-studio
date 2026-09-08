@@ -27,12 +27,19 @@ class WalletOpsJsTest < Minitest::Test
   end
 
   def setup
-    skip "node not available" unless self.class.node?
+    # FAILS rather than skips, matching network_guard_js_test.rb. A skipped JS
+    # lane is lost coverage that reads as green, and bin/release-check rejects a
+    # skipped file for the same reason.
+    assert self.class.node?, "node is required to run this suite (install node)"
   end
 
+  # Same rule as node above: a MISSING DEPENDENCY IS NOT A REASON TO SKIP. These
+  # are the tests that drive real crypto through the real handshake, so losing
+  # them silently is losing the only coverage that would catch a wrong key or a
+  # swapped nonce. CI installs it (see .github/workflows/gem-ci.yml).
   def require_nacl!
-    return if Dir.exist?(NACL)
-    skip "tweetnacl not installed — run `npm install` in the gem root"
+    assert Dir.exist?(NACL),
+           "tweetnacl is required for the crypto round trips — run `npm ci` in the gem root"
   end
 
   # `storage:` "working" | "throwing" | "absent" — the three states these
