@@ -54,6 +54,10 @@ class GemspecTest < Minitest::Test
     assert_includes spec.files, "app/views/solana_studio/modals/_network_mismatch.html.erb"
     assert_includes spec.files, "app/views/solana_studio/auth/_wallet_credential.html.erb"
     assert_includes spec.files, "app/assets/javascripts/solana_studio/network_guard.js"
+    assert_includes spec.files, "app/assets/javascripts/solana_studio/wallet_transport.js"
+    assert_includes spec.files, "app/assets/javascripts/solana_studio/redirect_provider.js"
+    assert_includes spec.files, "app/assets/javascripts/solana_studio/wallet_journal.js"
+    assert_includes spec.files, "app/assets/javascripts/solana_studio/wallet_ops.js"
   end
 
   def test_manifest_carries_no_directory_entries
