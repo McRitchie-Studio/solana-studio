@@ -71,7 +71,16 @@
   window.walletProvider = {
     available: function () { return [{ name: 'Phantom' }]; },
     get: function (name) { return name === 'Phantom' ? { name: 'Phantom' } : null; },
-    isMobile: function () { return false; }
+    // SHAPED FROM THE SHIPPED ARTICLE, not from what makes a spec pass — the
+    // rule this whole lab is held to. A host's isMobile reads the user agent
+    // (turf-monster's wallet_provider.js does exactly this), so the lab's does
+    // too. It used to return a hardcoded false, which made the picker's entire
+    // mobile branch unreachable from a browser: every desktop spec passed and
+    // the rows a phone actually sees were driven by nothing.
+    isMobile: function () {
+      return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+             (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
+    }
   };
 
   // Rejects, always — this lab exists for the failure path. A REAL rejected
