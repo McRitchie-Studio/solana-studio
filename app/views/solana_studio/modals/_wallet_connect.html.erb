@@ -194,9 +194,25 @@
        // SECOND Phantom row pointing at a desktop download page the user
        // cannot act on. ONLY when a deep link can replace it: with no deep
        // link the install row is the only Phantom path there is, dead end on
-       // iOS or not, and removing it leaves the user nothing. Solflare and
-       // Backpack keep their install rows either way — there is no deep link
-       // for them, so the download page is still their only path.
+       // iOS or not, and removing it leaves the user nothing.
+       //
+       // SOLFLARE AND BACKPACK STILL GET INSTALL ROWS HERE, and the reason is NOT
+       // the one this comment used to give. It claimed there was no deep link for
+       // them, which is FALSE and was costing those users: verified against both
+       // vendors' docs 2026-09-07, Solflare (solflare.com/ul/v1) and Backpack
+       // (backpack.app/ul/v1) each ship a full deeplink protocol, forked from
+       // Phantom's and sharing its encryption scheme and parameter names. So on a
+       // phone this row hands them a DESKTOP EXTENSION download page — a silent
+       // dead end, with no error, for a wallet that could have worked.
+       //
+       // What is actually missing is on OUR side: canDeepLink below asks whether
+       // ONE Phantom-specific global exists, so no other wallet can answer yes.
+       // solana_studio/redirect_provider.js now knows all three, and rewiring
+       // these three getters to ask it is the fix. Deliberately NOT done in the
+       // change that added that file: these getters are pinned by exact-source
+       // assertions in test/views/wallet_connect_picker_test.rb, and rewriting
+       // those belongs with the behaviour change rather than riding along with
+       // new primitives.
        get missingInstalls() {
          var self = this;
          return this.installs.filter(function(i) {
