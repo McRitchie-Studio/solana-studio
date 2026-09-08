@@ -214,11 +214,55 @@
        // assertions in test/views/wallet_connect_picker_test.rb, and rewriting
        // those belongs with the behaviour change rather than riding along with
        // new primitives.
+       // THE REDIRECT-TRANSPORT REGISTRY, guarded the same way canDeepLink is and
+       // for the same reason: a consumer that does not load
+       // solana_studio/redirect_provider.js has no registry, and an absent
+       // capability must not default to the permissive branch. Empty list, no
+       // rows, install rows keep their place.
+       get redirectProviders() {
+         var rp = window.SolanaStudio && window.SolanaStudio.redirectProvider;
+         if (!rp || typeof rp.all !== 'function') return [];
+         return rp.all().filter(function(w) { return w.can('browse'); });
+       },
+       // Wallets we can hand a phone to RIGHT NOW, and the honesty rule that
+       // shapes this list: a row is painted only when tapping it does something.
+       //
+       // The handoff is the browse deeplink — it opens this page inside the
+       // wallet's OWN in-app browser, where the wallet injects a provider and the
+       // ordinary detected-row flow above works unchanged. That needs no signing
+       // protocol on our side, which is exactly why it can ship before one.
+       //
+       // Excluded: a wallet already injected (the detected row above is a better
+       // offer than leaving the page), and Phantom when canDeepLink is true
+       // (its own row below is a full sign-in, not a handoff — offering both
+       // would be two Phantom rows racing each other).
+       get mobileHandoffs() {
+         if (!this.isMobile) return [];
+         var self = this;
+         return this.redirectProviders.filter(function(w) {
+           if (self.hasWallet(w.name)) return false;
+           if (w.key === 'phantom' && self.canDeepLink) return false;
+           return true;
+         });
+       },
+       // Navigate into the wallet's browser, carrying THIS page as the target so
+       // the user lands where they already were rather than on a home screen.
+       openInWallet(key) {
+         var rp = window.SolanaStudio && window.SolanaStudio.redirectProvider;
+         var w = rp && rp.forWallet(key);
+         if (!w) return;
+         window.location.href = w.browseUrl(window.location.href, window.location.origin);
+       },
        get missingInstalls() {
          var self = this;
+         var handoffs = this.mobileHandoffs.map(function(w) { return w.name.toLowerCase(); });
          return this.installs.filter(function(i) {
            if (self.hasWallet(i.name)) return false;
            if (self.isMobile && self.canDeepLink && i.name === 'Phantom') return false;
+           // A wallet with a working handoff row must not ALSO offer a desktop
+           // download page. That pairing is what sent Solflare and Backpack users
+           // on a phone to solflare.com/download — a dead end with no error.
+           if (self.isMobile && handoffs.indexOf(i.name.toLowerCase()) !== -1) return false;
            return true;
          });
        },
@@ -386,6 +430,23 @@
         </svg>
       </span>
     </button>
+
+    <%# Wallets we can hand this phone to. Rendered ABOVE the install rows on
+        purpose: a path that works belongs before a download page. Each row is
+        painted only when tapping it does something — see mobileHandoffs. %>
+    <template x-for="w in mobileHandoffs" :key="'handoff-' + w.key">
+      <button type="button" @click="openInWallet(w.key)"
+              class="w-full flex items-center gap-3 p-3 rounded-xl bg-surface-alt border border-strong hover:bg-surface transition text-left">
+        <svg class="w-9 h-9 shrink-0" aria-hidden="true"><use :href="'#se-wallet-' + brandIcon(w.name)"></use></svg>
+        <span class="font-semibold text-heading" x-text="w.name"></span>
+        <span class="ml-auto flex items-center gap-2">
+          <span class="text-xs text-muted uppercase tracking-wide">Open app</span>
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4 text-muted">
+            <path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+          </svg>
+        </span>
+      </button>
+    </template>
 
     <%# Featured wallets that aren't installed — open the install page %>
     <template x-for="i in missingInstalls" :key="i.name">
