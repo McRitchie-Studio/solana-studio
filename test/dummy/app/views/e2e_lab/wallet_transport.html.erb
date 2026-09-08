@@ -1,0 +1,69 @@
+<%# Drives the SHIPPED redirect transport in a real browser.
+
+    THE PAGE CARRIES NO TRANSPORT LOGIC. Every hook below delegates straight into
+    window.SolanaStudio.*, which are the four files e2e/boot.rb copied out of
+    app/assets — byte for byte what a consumer installs. The moment this page
+    reimplements any of it, the spec grades the lab and the lane reports green
+    over gem code no browser ever touched.
+
+    WHAT THIS TIER CAN SEE AND THE NODE SUITES CANNOT. They stub window and
+    localStorage and prove the algorithm. They cannot prove the files PARSE and
+    EXECUTE when a browser loads them — a stray byte or a syntax error a node
+    require tolerated leaves the hooks below MISSING and is invisible everywhere
+    else. And they cannot stage the event the whole design exists for: a REAL
+    navigation that destroys the page, with the journal expected to survive it in
+    real browser storage rather than in a hash a test kept alive. %>
+<%# NACL IS LOADED HERE, NOT IN THE LAYOUT, and the reason is a spec this once
+    broke. e2e/phantom_deeplink.spec.js installs a STUB nacl through
+    page.addInitScript so it can assert a byte-exact payload from fixed keys. An
+    init script runs BEFORE the document's own tags, so a blocking nacl tag in
+    the shared layout loads after it and CLOBBERS the stub — the deep link then
+    keys a real random session and the byte-exact assertion fails with 32 random
+    bytes where 32 sevens were expected. Scoped to this page, the two lanes do
+    not collide: that spec keeps its stub, and this one gets real crypto. %>
+<script src="/e2e/js/nacl-fast.min.js"></script>
+
+<main data-test="wallet-transport-lab">
+  <p data-test="modules-loaded"><%= "" %></p>
+  <p data-test="journal-after-return"><%= "" %></p>
+  <a data-test="leave" href="/lab/guard">leave</a>
+</main>
+
+<script>
+  // Presence, not behaviour: proves all four shipped files executed. Each is
+  // named so a failure says WHICH one did not arrive rather than "MISSING".
+  (function () {
+    var S = window.SolanaStudio || {};
+    var missing = ['walletTransport', 'redirectProvider', 'walletJournal', 'walletOps']
+      .filter(function (k) { return !S[k]; });
+    document.querySelector('[data-test="modules-loaded"]').textContent =
+      missing.length ? 'MISSING: ' + missing.join(',') : 'loaded';
+  })();
+
+  // Reports whatever survived the navigation, read back through the SHIPPED
+  // journal rather than by touching localStorage directly — the contract under
+  // test is that the journal can read what it wrote across a page death, not
+  // that a browser has storage.
+  (function () {
+    var pending = window.SolanaStudio.walletJournal.peek();
+    document.querySelector('[data-test="journal-after-return"]').textContent =
+      pending ? pending.wallet + ':' + pending.step : 'none';
+  })();
+
+  // The spec's entry points. Each returns exactly what the gem returns.
+  window.labBeginConnect = function (wallet) {
+    var provider = window.SolanaStudio.redirectProvider.forWallet(wallet);
+    var begun = provider.beginConnect({
+      appUrl: window.location.origin,
+      redirectLink: window.location.origin + '/lab/wallet_transport',
+      cluster: document.body.dataset.solanaCluster
+    });
+    // Persist through the shipped journal, exactly as walletOps would.
+    window.SolanaStudio.walletJournal.save(begun.journal);
+    return begun.url;
+  };
+
+  window.labClearJournal = function () {
+    window.SolanaStudio.walletJournal.clear();
+  };
+</script>

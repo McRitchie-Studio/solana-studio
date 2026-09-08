@@ -16,6 +16,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>solana-studio e2e lab</title>
     <script src="/e2e/js/solana_studio/network_guard.js"></script>
+    <%# The redirect-transport set, loaded the way a host loads it: plain
+        <script src> off the REAL files e2e/boot.rb copied out of app/assets.
+        Order matters — redirect_provider and wallet_ops both read
+        window.SolanaStudio.walletTransport at call time, and wallet_ops reaches
+        for walletJournal, so the core comes first. They define no globals of
+        their own beyond SolanaStudio.* and are inert until a page calls them,
+        which is why every lab page can carry them without affecting the others. %>
+    <script src="/e2e/js/solana_studio/wallet_transport.js"></script>
+    <script src="/e2e/js/solana_studio/redirect_provider.js"></script>
+    <script src="/e2e/js/solana_studio/wallet_journal.js"></script>
+    <script src="/e2e/js/solana_studio/wallet_ops.js"></script>
   </head>
   <%# `x-data` ON THE BODY is a HOST responsibility, not decoration.
       studio-engine's modal host roots itself at a bare

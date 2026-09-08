@@ -31,6 +31,21 @@ gem_js_dst = File.join(PUBLIC_DIR, "js", "solana_studio")
 FileUtils.mkdir_p(gem_js_dst)
 FileUtils.cp_r(Dir.glob(File.join(gem_js_src, "*")), gem_js_dst)
 
+# ---- tweetnacl, which the HOST supplies -------------------------------------
+#
+# The redirect transport's codec has exactly one dependency and it is guarded:
+# window.nacl. A host provides it — turf-monster loads it from a blocking,
+# SRI-pinned tag — so the lab, which IS the host here, provides it too.
+#
+# From node_modules rather than a CDN, on purpose: a browser lane that reaches
+# the network to run is a lane that goes red when the network does, and the
+# failure would read as a broken transport rather than a broken download.
+nacl_src = File.join(ROOT, "node_modules", "tweetnacl", "nacl-fast.min.js")
+unless File.exist?(nacl_src)
+  abort "e2e/boot: tweetnacl is not installed — run `npm ci` (the transport lab cannot key a session without it)"
+end
+FileUtils.cp(nacl_src, File.join(PUBLIC_DIR, "js", "nacl-fast.min.js"))
+
 # ---- studio-engine's vendored Alpine -----------------------------------------
 #
 # From the INSTALLED GEM, not vendored again here. The modal host's store and the

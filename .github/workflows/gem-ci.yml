@@ -47,6 +47,16 @@ jobs:
         with:
           node-version: "20"
 
+      # tweetnacl is a TEST dependency of the redirect-transport suites. They run
+      # the shipped .js under node with REAL crypto on BOTH sides — a stub shaped
+      # from the code under test would certify the code's own assumptions and
+      # nothing else, and the handshake is exactly where a wrong key or a swapped
+      # nonce would hide. Without this step those files SKIP, and bin/release-check
+      # rejects a skipped file for precisely the reason this comment exists: the
+      # lane would still read green while covering nothing.
+      - name: Install node test dependencies
+        run: npm ci
+
       - name: Suite
         run: bin/release-check
 
