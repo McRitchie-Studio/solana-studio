@@ -30,6 +30,10 @@ module SolanaStudio
 
       app.config.assets.precompile += %w[
         solana_studio/network_guard.js
+        solana_studio/wallet_transport.js
+        solana_studio/redirect_provider.js
+        solana_studio/wallet_journal.js
+        solana_studio/wallet_ops.js
       ]
     end
   end

@@ -57,4 +57,12 @@ class E2eLabController < ActionController::Base
   def wallet_failure
     @network_json = Solana::Network.describe(LAB_CLUSTER, environment: LAB_ENVIRONMENT).to_json
   end
+
+  # The redirect transport. No ivar and no locals: the whole surface under test
+  # is the four shipped scripts the LAYOUT loads, exactly as a host loads them.
+  # The page's only job is to exist at a URL a browser can navigate away from and
+  # back to — which is the one thing no other tier can stage.
+  def wallet_transport
+    @network_json = Solana::Network.describe(LAB_CLUSTER, environment: LAB_ENVIRONMENT).to_json
+  end
 end

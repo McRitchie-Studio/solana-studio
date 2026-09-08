@@ -10,8 +10,9 @@
     global this gem does NOT ship: window.walletProvider and
     window.solanaConnectAndVerify are turf-monster's wallet_provider.js,
     parseSolanaError and reportWalletFailure are its solana_errors.js. The gem's
-    whole shipped JavaScript tree is one file (network_guard.js) and it defines
-    none of them. The lab is the host here, so the lab provides them — the same
+    shipped JavaScript tree is the network guard plus the redirect-transport
+    set (wallet_transport, redirect_provider, wallet_journal, wallet_ops) and
+    none of them defines any of these globals. The lab is the host here, so the lab provides them — the same
     relationship /lab/modal has to Solana::Network.describe.
 
     STAND-INS SHAPED FROM THE SHIPPED ARTICLE, not from what makes a spec pass.
