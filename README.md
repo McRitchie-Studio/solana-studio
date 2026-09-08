@@ -351,9 +351,11 @@ shipped on exactly these terms.
 
 #### The host JavaScript these modals reach for
 
-Every global below belongs to the **host**. This gem ships one JavaScript file
-(`solana_studio/network_guard.js`) and **no routes at all**, so none of these can
-live here. Each is reached behind a `typeof` guard: an absent one degrades the
+Every global below belongs to the **host**. This gem ships **no routes at all**,
+and the JavaScript it does ship is a different category from the globals below:
+`solana_studio/network_guard.js` plus the redirect-transport primitives
+(`wallet_transport`, `redirect_provider`, `wallet_journal`, `wallet_ops`), none of
+which provide any global in this table. So none of these can live here. Each is reached behind a `typeof` guard: an absent one degrades the
 card rather than breaking it, and the whole point of writing the list down is
 that a consumer meets it here instead of rediscovering it.
 

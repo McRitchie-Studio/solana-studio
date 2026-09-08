@@ -77,9 +77,10 @@
                          calls window.startPhantomDeepLink(linkMode, userId).
     onBack()             the Back button; DEFAULT closes the modal
 
-  CONTRACT WITH THE HOST'S JS. This gem ships one JavaScript file
-  (solana_studio/network_guard.js) and no routes at all, so every global below is
-  the HOST'S to provide. Each is reached behind a `typeof` guard, and an absent
+  CONTRACT WITH THE HOST'S JS. This gem ships no routes at all, and the JavaScript
+  it does ship provides no global in this list: solana_studio/network_guard.js
+  plus the redirect-transport primitives (wallet_transport, redirect_provider,
+  wallet_journal, wallet_ops). So every global below is the HOST'S to provide. Each is reached behind a `typeof` guard, and an absent
   one degrades this card rather than breaking it — which is the whole reason the
   list is written down here instead of being rediscovered per consumer.
 
