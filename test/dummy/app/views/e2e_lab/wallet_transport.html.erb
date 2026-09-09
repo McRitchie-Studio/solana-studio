@@ -66,4 +66,44 @@
   window.labClearJournal = function () {
     window.SolanaStudio.walletJournal.clear();
   };
+
+  // WHICH SIGNING DEEPLINK THE GEM CHOOSES, observed without leaving the page.
+  //
+  // The choice happens inside walletOps.run -> beginSigning -> signingHop, all
+  // of it gem code; this hook supplies the two things a caller owns — the
+  // journal fields a completed connect would have produced, and somewhere to
+  // put the URL instead of window.location. Capturing `navigate` is what keeps
+  // the document alive long enough for a spec to read the answer, and it is the
+  // same seam the node suites use, so nothing here is a browser-only path.
+  //
+  // `declaration` is passed through verbatim rather than defaulted, so a spec
+  // can drive BOTH branches: null leaves signOnly absent entirely.
+  window.labSigningHop = function (wallet, declaration) {
+    var S = window.SolanaStudio;
+    S.walletOps.reset();
+
+    var handler = {
+      prepare: function () { return { transaction: 'TXB58' }; },
+      complete: function () { return 'done'; }
+    };
+    if (declaration !== null) { handler.signOnly = declaration; }
+    S.walletOps.define('lab_intent', handler);
+
+    var b58 = S.walletTransport.base58;
+    var dapp = window.nacl.box.keyPair();
+    var wal = window.nacl.box.keyPair();
+    var chosen = null;
+
+    return S.walletOps.run('lab_intent', {}, {
+      provider: S.redirectProvider.forWallet(wallet),
+      redirectLink: window.location.origin + '/lab/wallet_transport',
+      navigate: function (url) { chosen = url; },
+      session: {
+        dappSecretKey: b58.encode(dapp.secretKey),
+        dappPublicKey: b58.encode(dapp.publicKey),
+        walletPublicKey: b58.encode(wal.publicKey),
+        session: 'LAB'
+      }
+    }).then(function () { return chosen; });
+  };
 </script>
