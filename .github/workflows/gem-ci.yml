@@ -51,9 +51,16 @@ jobs:
       # the shipped .js under node with REAL crypto on BOTH sides — a stub shaped
       # from the code under test would certify the code's own assumptions and
       # nothing else, and the handshake is exactly where a wrong key or a swapped
-      # nonce would hide. Without this step those files SKIP, and bin/release-check
-      # rejects a skipped file for precisely the reason this comment exists: the
-      # lane would still read green while covering nothing.
+      # nonce would hide.
+      #
+      # Without this step those files FAIL — they do not skip, and the difference
+      # is worth stating because the wrong version of it credits the wrong guard.
+      # require_nacl! ASSERTS the dependency is present and names the remedy
+      # ("run `npm ci` in the gem root"), so the lane goes red on its own rather
+      # than on bin/release-check's skip-rejector. Measured 2026-09-09 by hiding
+      # node_modules: wallet_ops_js_test.rb reported 19 runs, 6 failures, 0 SKIPS.
+      # release-check's skip rule still stands behind it as a second line, for a
+      # test that stops covering something some other way.
       - name: Install node test dependencies
         run: npm ci
 
