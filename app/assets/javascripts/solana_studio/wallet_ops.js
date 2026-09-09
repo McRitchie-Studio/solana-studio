@@ -11,10 +11,21 @@
 //
 //   walletOps.define('contest_entry', {
 //     prepare:  function (ctx) { ... return { transaction: <base58>, ...state }; },
-//     complete: function (ctx, result, state) { ... }
+//     complete: function (ctx, result, state) { ... },
+//     signOnly: true
 //   });
 //
 //   walletOps.run('contest_entry', { contestId: 12 }, { provider: ... });
+//
+// `signOnly` IS A REQUIREMENT OF THE TRANSACTION, NOT A PREFERENCE ABOUT THE
+// WALLET, and it is the intent's to declare because only the intent knows the
+// shape of the bytes it prepared. A CO-SIGNED transaction — one whose second
+// signer slot is deliberately empty because a server fills it — cannot be
+// broadcast by the wallet: the chain would reject it for a missing required
+// signature, and, worse, the signed bytes the server needs would never come
+// back to the app, so the flow fails with nothing to retry. Declaring it makes
+// the transaction's own requirement outrank the wallet's capability. Omit it
+// and nothing changes: a wallet that can broadcast still does.
 //
 // THE ONE RULE A CALLER MUST FOLLOW: handlers are registered BY NAME at page
 // load, not passed as closures. A closure is precisely what cannot survive the
@@ -30,7 +41,8 @@
 // WHAT THIS FILE DOES NOT DO: it does not broadcast. Signing and sending are
 // different responsibilities with different failure modes, and the wallet that
 // broadcasts differs per vendor (Phantom deprecated its send-side deeplink, so
-// the app sends; Solflare and Backpack send for you). `complete` is told which
+// the app sends; Solflare and Backpack send for you) — and, where the intent
+// declares `signOnly`, per TRANSACTION as well. `complete` is told which
 // happened and owns the RPC, exactly as the existing flows already do.
 (function (W) {
   'use strict';
@@ -107,6 +119,23 @@
     return Promise.resolve(handler.prepare(ctx)).then(function (prepared) {
       var intent = { op: name, ctx: ctx, state: prepared };
 
+      // THE DECLARATION TRAVELS IN THE JOURNAL, NOT LOOKED UP FROM THE HANDLER
+      // AT THE FAR END, and that is the whole reason this line exists here
+      // rather than inside signingHop. The signing hop is taken from TWO
+      // places: this one, where the handler is certainly registered, and the
+      // connect callback, which is a DIFFERENT PAGE that may not have loaded
+      // the script that defined this intent. A handler lookup there would come
+      // back empty and silently fall through to the send-side default — the
+      // exact branch a co-signed transaction must never take. A boolean on the
+      // intent is JSON-serialisable, which is the one thing this file requires
+      // of anything that has to survive a redirect.
+      //
+      // Set ONLY when true, so the journal an undeclared intent writes is
+      // byte-identical to the one it wrote before this option existed. That is
+      // also why JOURNAL_VERSION does not move: no reader's expectations
+      // change, and bumping it would strand every trip already in flight.
+      if (handler.signOnly) intent.signOnly = true;
+
       // Already connected? Go straight to signing. Otherwise connect first and
       // carry the intent through — sessions do not expire on any of the three
       // wallets, so this branch is taken once per user, not once per action.
@@ -145,18 +174,38 @@
     return signingHop(provider, connected, opts);
   }
 
-  // Which signing method this wallet gets is a CAPABILITY QUESTION, not a
-  // preference: Phantom's send-side deeplink is deprecated, so it signs and the
-  // app broadcasts. Asking the provider keeps that fact in the profile table
-  // where it is asserted, rather than branching on a wallet name here.
+  // Which signing method this wallet gets is TWO questions asked in order, and
+  // the order is the point.
+  //
+  // FIRST, what does the TRANSACTION allow? A co-signed transaction has an
+  // empty signer slot the server fills, so the wallet must sign and hand the
+  // bytes back — broadcasting it is not a worse option, it is a broken one.
+  // An intent that knows this declares `signOnly` and that answer is final.
+  //
+  // SECOND, and only for everything else, what can the WALLET do? Phantom's
+  // send-side deeplink is deprecated, so it signs and the app broadcasts;
+  // Solflare and Backpack broadcast for you. Asking the provider keeps that
+  // fact in the profile table where it is asserted, rather than branching on a
+  // wallet name here.
+  //
+  // Asking them the other way round is the bug this replaced: capability alone
+  // sent every co-signed transaction to the wallet's broadcaster on any wallet
+  // that had one.
+  //
+  // A wallet with no signTransaction at all would be refused BY NAME by the
+  // provider's own capability gate rather than quietly broadcast here. No
+  // profile is in that state today (all three sign), and this is the branch
+  // that would have to be revisited if one ever were.
   function signingHop(provider, journal, opts) {
+    var intent = journal.intent;
     var payload = {
       journal: journal,
-      transaction: journal.intent.state.transaction,
+      transaction: intent.state.transaction,
       redirectLink: opts.redirectLink,
-      intent: journal.intent
+      intent: intent
     };
-    return provider.can('signAndSendTransaction')
+    var signOnly = !!(intent && intent.signOnly);
+    return (!signOnly && provider.can('signAndSendTransaction'))
       ? provider.beginSignAndSendTransaction(payload)
       : provider.beginSignTransaction(payload);
   }
@@ -233,6 +282,18 @@
     define: function (name, handler) {
       if (!handler || typeof handler.prepare !== 'function' || typeof handler.complete !== 'function') {
         throw new Error('walletOps.define("' + name + '") needs both prepare and complete');
+      }
+      // REFUSED RATHER THAN COERCED, because every wrong answer here fails in
+      // the dangerous direction. A typo'd `signOnly: 'true'` read as truthy
+      // would sign-only a flow that wanted the wallet to broadcast; read
+      // strictly, it silently sends a co-signed transaction to a broadcaster.
+      // Neither is discoverable at the call site, and both surface as a chain
+      // error one page death later. So the option is a boolean or it is a bug.
+      if (handler.signOnly !== undefined && typeof handler.signOnly !== 'boolean') {
+        throw new Error(
+          'walletOps.define("' + name + '") signOnly must be true or false, got ' +
+          typeof handler.signOnly
+        );
       }
       handlers[name] = handler;
     },
