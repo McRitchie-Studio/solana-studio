@@ -354,7 +354,8 @@ shipped on exactly these terms.
 Every global below belongs to the **host**. This gem ships **no routes at all**,
 and the JavaScript it does ship is a different category from the globals below:
 `solana_studio/network_guard.js` plus the redirect-transport primitives
-(`wallet_transport`, `redirect_provider`, `wallet_journal`, `wallet_ops`), none of
+(`wallet_transport`, `redirect_provider`, `wallet_journal`, `wallet_ops` — see
+[The wallet intent registry](#the-wallet-intent-registry-walletops)), none of
 which provide any global in this table. So none of these can live here. Each is reached behind a `typeof` guard: an absent one degrades the
 card rather than breaking it, and the whole point of writing the list down is
 that a consumer meets it here instead of rediscovering it.
@@ -424,6 +425,154 @@ asynchronous. A callback that reads `nacl` at parse time will lose that race.
 Adopt the loader only together with a callback that waits; otherwise keep a
 blocking `<script>` tag of your own with the same SRI-pinned URL. turf-monster
 deliberately does the latter.
+
+### The wallet intent registry (`walletOps`)
+
+`solana_studio/wallet_ops.js` is how one piece of product logic — enter a
+contest, rename a user, export a wallet — runs over **both** wallet transports
+from **one** call site. The inline transport is an injected provider where
+`await` works; the redirect transport hands off to a wallet app by URL and the
+page is destroyed mid-operation. A flow is declared once, by name:
+
+```js
+SolanaStudio.walletOps.define('contest_entry', {
+  prepare:  function (ctx) { /* → { transaction: '<base58>', ...state } */ },
+  complete: function (ctx, result, state) { /* result.signedTransaction is base58 */ },
+  signOnly: true
+});
+
+SolanaStudio.walletOps.run('contest_entry', { contestId: 12 }, {
+  provider: walletProvider.detect(),
+  expectedAccount: session.address,          // optional
+  appUrl: location.origin,                   // redirect transport only
+  redirectLink: location.origin + '/auth/phantom/callback',
+  cluster: document.body.dataset.solanaCluster
+});
+```
+
+Handlers are registered **by name at page load**, never passed as closures: a
+closure is precisely what cannot survive the redirect. Everything the flow needs
+on the far side travels as JSON in the journal.
+
+#### The transaction is base58 wire bytes, on every transport
+
+`prepare()` **must** return `{ transaction: '<base58>' }`, and `complete()` is
+handed base58 in `result.signedTransaction`, whichever transport ran. A
+transaction that is not a non-empty string is refused by name at the call site,
+on both paths.
+
+This is not a preference. Base58 is what survives a page death; a
+`solanaWeb3.Transaction` serialises into a journal as `{}`. Until 0.9.1 only the
+redirect path obeyed it — the inline path passed `prepared.transaction` straight
+to `provider.signTransaction`, which for an injected wallet must be a Transaction
+**object** — so a single intent could not serve both transports and every
+consumer kept a second, hand-rolled desktop call site.
+
+#### The inline provider's transaction codec
+
+The gem cannot convert between the two shapes: deserializing base58 into a
+Transaction needs `@solana/web3.js`, and the only JavaScript dependency here is
+a guarded `window.nacl`. Taking web3.js would put a browser library on the
+critical path of a gem whose other consumers are plain-Ruby, to do work your
+wallet adapter already does.
+
+So the conversion is the **inline provider's**, and it is required in both
+directions:
+
+| Method | Given | Returns |
+|---|---|---|
+| `deserializeTransaction(base58)` | base58 wire bytes | whatever your `signTransaction` accepts |
+| `serializeTransaction(signed)` | whatever `signTransaction` resolved | base58 wire bytes |
+
+Both are checked **before** the wallet is touched, and an inline provider missing
+either is refused by name — a base58 string reaching an extension's
+`signTransaction` throws `t.serialize is not a function` from inside someone
+else's code, and a missing `serializeTransaction` would not surface until after
+the user had already approved a signature.
+
+The return leg is not garnish. Without `serializeTransaction` the redirect path
+hands `complete` a base58 string and the inline path hands it a signed
+Transaction object, your call site branches on which, and nothing has been
+unified.
+
+A reference adapter, for a **co-signed** transaction — the server fills a second
+signer slot, so both serialize flags are off and a bare `signed.serialize()`
+would throw on the missing signature:
+
+```js
+var base58 = SolanaStudio.walletTransport.base58;
+
+inlineProvider.deserializeTransaction = function (wire) {
+  return solanaWeb3.Transaction.from(base58.decode(wire));
+};
+
+inlineProvider.serializeTransaction = function (signed) {
+  return base58.encode(
+    signed.serialize({ requireAllSignatures: false, verifySignatures: false })
+  );
+};
+```
+
+Write it once, on the object your `detect()` returns, and every intent in the app
+is covered. Putting it on the intent instead is the same three lines of web3.js
+copied into each flow — per-call-site duplication wearing a different hat.
+
+#### `expectedAccount` — a UX guard, not a security one
+
+`run(..., { expectedAccount: '<base58 address>' })` declares which account the
+caller believes it is about to use, and walletOps refuses the trip when a
+different one connects. **The ownership proof is on-chain** — Anchor rejects a
+transaction whose signer does not match the PDA's owner, with or without this.
+What the declaration buys is a sentence the user can act on instead of a program
+error, plus, on the inline transport, a server-minted prepared transaction that
+is never wasted.
+
+The refusal carries `err.wrongAccount === true` and the full `err.expected` /
+`err.connected` addresses, so a host can compose its own sentence rather than
+parse the default one.
+
+It is a **string**, not a `PublicKey`, and a non-string is refused: a PublicKey
+would stringify correctly inline and be journalled as `{}` on the redirect path,
+matching on a desktop and refusing every mobile trip.
+
+Where it is checked, and what that costs, differs by transport — this is the one
+place the two genuinely cannot be made identical:
+
+| Transport | Checked | Cost of a wrong wallet |
+|---|---|---|
+| Inline | after `connect()`, **before** `prepare()` | nothing — `prepare` never runs |
+| Redirect, cold session | on the connect callback, **before** the signing hop | whatever `prepare` already minted; no signing prompt |
+| Redirect, warm session (`opts.session`) | **not checked** | — |
+
+The redirect path cannot check earlier because the connect hop destroys the
+page: everything `prepare` returns must already be in the journal before the
+navigation. A warm session takes no connect hop at all, so walletOps never learns
+an account — a caller holding a session learned the address when it established
+one, and that is where the check belongs.
+
+It is a declared **value** rather than a post-connect hook on purpose. The
+connect callback is a different document — in this ecosystem, studio-engine's
+wallet callback view, which knows nothing about any consumer's flows — and
+`resume` deliberately does not require a registered handler to advance from
+connect to signing. A hook would be looked up on exactly the hop it exists to
+guard, come back empty, and be skipped in silence.
+
+#### `signOnly`
+
+A **co-signed** transaction cannot be broadcast by the wallet: the chain rejects
+it for the missing signature, and the signed bytes the server needs never come
+back. `signOnly: true` makes the transaction's requirement outrank the wallet's
+capability, so the trip takes `signTransaction` even on Solflare and Backpack,
+which do ship a send-side deeplink. Omit it and nothing changes: a wallet that
+can broadcast still does. It is a boolean or it is refused.
+
+#### What `walletOps` does not do
+
+It does not broadcast, and it mounts no routes. `complete` is told which side
+sent — `sendStrategy` is `'app-broadcasts'` or `'wallet-broadcasts'` — and owns
+the RPC. The redirect leg also needs a host callback page to call
+`walletOps.resume(params, { navigate })`; studio-engine's
+`solana_sessions/phantom_callback` does this from 0.73.0.
 
 ## Dependencies
 
