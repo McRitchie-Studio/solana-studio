@@ -1,8 +1,11 @@
 # frozen_string_literal: true
 
-require_relative "test_helper"
+require_relative "../test_helper"
 
-# [unit] STRUCTURE guard for CHANGELOG.md. It asserts the file's SHAPE, never its
+# [unit] STRUCTURE guard for CHANGELOG.md. It lives under test/docs/ because its
+# SUBJECT is a prose file rather than any behaviour of the gem — the same reason
+# bin/dor-check counts a test/docs/*_test.rb file as documentation work rather
+# than as a behavioural change. It asserts the file's SHAPE, never its
 # prose — no assertion here names an entry, a feature or a word, so ordinary
 # changelog writing cannot turn it red.
 #
@@ -25,7 +28,7 @@ require_relative "test_helper"
 # unparseable at once and this fails loudly — there is no number to copy wrong
 # and no way for the parsed set to collapse quietly to zero.
 class ChangelogStructureTest < Minitest::Test
-  ROOT = File.expand_path("..", __dir__)
+  ROOT = File.expand_path("../..", __dir__)
   CHANGELOG_PATH = File.join(ROOT, "CHANGELOG.md")
 
   UNRELEASED = "## Unreleased"
