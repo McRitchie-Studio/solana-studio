@@ -78,6 +78,82 @@
   //
   // `declaration` is passed through verbatim rather than defaulted, so a spec
   // can drive BOTH branches: null leaves signOnly absent entirely.
+  // THE INLINE TRANSPORT, END TO END, IN A REAL BROWSER.
+  //
+  // The node suite owns the branches; what only this tier can answer is whether
+  // the shipped bytes RUN one — the inline path is a promise chain over a
+  // provider object, and a loader difference or a stray byte leaves it throwing
+  // where a node `require` tolerated it.
+  //
+  // THE ACCOUNT IS A REAL OBJECT HERE, not the plain string the node suite
+  // passes. A `solanaWeb3.PublicKey` is an object whose toString() is its base58
+  // address, and the gem reads it with `String(pk)` precisely so it can do that
+  // without touching web3.js. This is the tier where that object actually
+  // exists, so this is where the reduction is worth asserting.
+  //
+  // THE ADAPTER MODELS A REAL ONE and refuses to be lenient: signTransaction
+  // THROWS on anything that is not an object, exactly as an extension does, so a
+  // regression that handed it base58 fails here rather than passing quietly.
+  window.labInlineRun = function (mode) {
+    var S = window.SolanaStudio;
+    S.walletOps.reset();
+
+    var LINKED = 'GkxHc1Bv7pQm4RtyVn2ZcAeD8sWfLuJp3NoXaTgYkQrM';
+    var STRANGER = '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM';
+    var calls = [];
+
+    S.walletOps.define('lab_inline', {
+      prepare: function (ctx) { calls.push('prepare'); return { transaction: 'TXB58', slug: 'ptx-' + ctx.id }; },
+      complete: function (ctx, result, state) {
+        return {
+          signedType: typeof result.signedTransaction,
+          signed: result.signedTransaction,
+          stateTx: state.transaction,
+          slug: state.slug,
+          sent: result.sendStrategy,
+          calls: calls
+        };
+      }
+    });
+
+    // A PublicKey-shaped account: an object that stringifies to its address.
+    function pubkey(address) {
+      return { toBase58: function () { return address; }, toString: function () { return address; } };
+    }
+
+    var provider = {
+      transport: 'inline',
+      connect: function () {
+        calls.push('connect');
+        return Promise.resolve({ publicKey: pubkey(mode === 'wrongAccount' ? STRANGER : LINKED) });
+      },
+      deserializeTransaction: function (wire) {
+        if (typeof wire !== 'string') throw new Error('the adapter was handed a non-string to deserialize');
+        calls.push('deserialize');
+        return { tx: wire };
+      },
+      signTransaction: function (tx) {
+        if (!tx || typeof tx !== 'object') throw new Error('an injected wallet signs an OBJECT, got ' + typeof tx);
+        calls.push('sign');
+        return Promise.resolve({ tx: 'SIGNED-' + tx.tx });
+      },
+      serializeTransaction: function (signed) { calls.push('serialize'); return signed.tx; }
+    };
+    if (mode === 'noCodec') { delete provider.deserializeTransaction; }
+
+    return S.walletOps.run('lab_inline', { id: 7 }, {
+      provider: provider,
+      expectedAccount: LINKED
+    }).then(function (value) {
+      return { outcome: 'ran', value: value };
+    }, function (e) {
+      return {
+        outcome: 'refused', message: e.message, calls: calls,
+        wrongAccount: !!e.wrongAccount, expected: e.expected || null, connected: e.connected || null
+      };
+    });
+  };
+
   window.labSigningHop = function (wallet, declaration) {
     var S = window.SolanaStudio;
     S.walletOps.reset();
