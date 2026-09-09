@@ -63,12 +63,50 @@ Troubleshooting guide for autonomous agents. Format: problem, diagnosis, fix.
 **Test command**
 ```bash
 cd /Users/alex/projects/solana-studio
-ruby -Itest test/keypair_test.rb test/borsh_test.rb test/transaction_test.rb
+bin/release-check          # the whole suite, one file at a time
+bin/release-check --list   # what it will run, in order
 ```
+`bin/release-check` is the one entry point local certs, CI, and the release
+sweep all share, so those three cannot drift apart. It enumerates by glob
+(`find test -name '*_test.rb'`), so a new test file is covered the moment it
+lands and there is no curated list to forget one from. It also fails a file
+that runs ZERO tests or SKIPS one — a suite that quietly stops covering
+something is the failure a green build cannot show you.
+
+Run one file directly while iterating: `bundle exec ruby -Itest test/keypair_test.rb`.
+
+**Ten JS tests fail with `tweetnacl is required for the crypto round trips`**
+- Diagnosis: a FRESH checkout or worktree has no `node_modules`. The JS lanes
+  (`test/wallet_ops_js_test.rb`, `test/network_guard_js_test.rb`,
+  `test/redirect_provider_js_test.rb`, `test/wallet_transport_js_test.rb`)
+  shell out to node and FAIL rather than skip, deliberately — the gem's suite
+  refuses a skip, because a lane that vanishes without node looks identical to
+  a lane that passed.
+- Fix: `npm ci` in the gem root, then re-run. Do this before the first
+  `bin/release-check` on any new worktree; CI does the same (`npm ci` precedes
+  `bin/release-check` in `.github/workflows/gem-ci.yml`).
 
 **Test fails with missing `ed25519` gem**
 - Diagnosis: The only runtime dependency. `LoadError: cannot load such file -- ed25519`.
 - Fix: `cd /Users/alex/projects/solana-studio && bundle install`. The gemspec requires `ed25519 ~> 1.3`.
+
+**`test/docs/changelog_structure_test.rb` is red**
+- Diagnosis: `CHANGELOG.md`'s shape, not its prose. The assertion that usually
+  fires is the drift guard — `SolanaStudio::VERSION` more than two minor
+  versions ahead of the newest `## ` heading, which means releases went out
+  while their entries stayed under `## Unreleased`. The others catch a second
+  `## Unreleased`, a heading that is not `## vX.Y.Z (YYYY-MM-DD)`, versions out
+  of order or listed twice, and a `### ` above the first `## `.
+- Fix: move each stranded entry under the version that actually shipped it,
+  newest first. Attribute by git history, never by position in the file: `git
+  blame -w -M` on the line, `git log --reverse -S'<entry text>' -- CHANGELOG.md`,
+  and `git show <tag>:CHANGELOG.md` at each release tag agreeing is the
+  evidence. Leave anything you cannot place confidently under `## Unreleased`
+  and say so — a wrongly attributed changelog is worse than a long one. A
+  release that recorded nothing keeps a heading with no entries under it.
+- Note: the hub's `bin/release prepare` rolls the bucket at every gem publish
+  and REFUSES to publish while this drift exists, so a red run here is the same
+  defect the release conductor would stop on, caught earlier.
 
 **Adding new tests**
 - Tests are plain minitest files in `test/`. No Rails, no fixtures. Each test file requires `test_helper.rb` which loads the gem. To add a test for `Solana::Client`, create `test/client_test.rb` following the existing pattern.
