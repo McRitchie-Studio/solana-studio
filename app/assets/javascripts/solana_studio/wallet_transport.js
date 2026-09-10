@@ -292,11 +292,39 @@
     return parts.join('&');
   }
 
+  // A REQUEST WITH NOWHERE TO RETURN IS NOT A REQUEST, and until this existed it
+  // was possible to build one and impossible to notice. query() below SKIPS
+  // null/undefined/empty values, so a missing redirect_link simply vanished from
+  // the URL and the request looked perfectly well formed on the way out. Phantom
+  // received it, had nothing to do with it, and opened to its HOME SCREEN — which
+  // is indistinguishable, to a user, from the app being broken.
+  //
+  // Measured on a real iPhone against QA 2026-09-09: hop one (connect) completed
+  // correctly and hop two was built with redirect_link undefined, because the
+  // journal never carried it across the page death. The entry was lost after the
+  // user had already approved it.
+  //
+  // Guarding at the BUILDER rather than at each call site is the point. There are
+  // three places that construct these URLs today and more will follow; a rule
+  // enforced where the string is assembled cannot be forgotten by the next one.
+  function requireField(value, name, method) {
+    if (value === null || value === undefined || value === '') {
+      throw new Error(
+        'Cannot build a ' + method + ' wallet request without ' + name +
+        ' — the wallet would have nowhere to return to. This usually means the ' +
+        'value was not carried across the redirect in the journal.'
+      );
+    }
+    return value;
+  }
+
   var url = {
     // connect carries NO nonce and NO payload — the shared secret does not exist
     // yet. Every other method requires both.
     connect: function (wallet, opts) {
       var b = base(wallet, opts && opts.useScheme);
+      requireField(opts && opts.redirectLink, 'redirect_link', 'connect');
+      requireField(opts && opts.dappPublicKey, 'dapp_encryption_public_key', 'connect');
       return b.prefix + 'connect?' + query({
         app_url: opts.appUrl,
         dapp_encryption_public_key: opts.dappPublicKey,
@@ -310,6 +338,10 @@
         throw new Error(wallet + ' does not support ' + method + ' over the redirect transport');
       }
       var b = base(wallet, opts && opts.useScheme);
+      requireField(opts && opts.redirectLink, 'redirect_link', method);
+      requireField(opts && opts.dappPublicKey, 'dapp_encryption_public_key', method);
+      requireField(opts && opts.payload, 'payload', method);
+      requireField(opts && opts.nonce, 'nonce', method);
       return b.prefix + method + '?' + query({
         dapp_encryption_public_key: opts.dappPublicKey,
         nonce: opts.nonce,
