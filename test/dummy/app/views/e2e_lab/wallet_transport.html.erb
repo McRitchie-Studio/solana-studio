@@ -63,6 +63,55 @@
     return begun.url;
   };
 
+  // A STAND-IN WALLET, in the browser, driving the hop the phone found broken.
+  //
+  // The page dies between hops in production. Here we cannot leave the document,
+  // so this reproduces the ONE property that matters and that node could not see:
+  // the second hop is built by a resume() that has NO CALLER — it runs where the
+  // wallet sent us — so everything it needs must already be in the journal, read
+  // back out of real browser storage.
+  //
+  // It answers the connect hop the way a wallet does (deriving the shared secret
+  // from the dapp key the URL carried) and returns the SECOND hop's URL for the
+  // spec to inspect. Shaped from the vendor protocol, not from our code.
+  window.labSecondHopUrl = async function (wallet) {
+    var S = window.SolanaStudio;
+    var urls = [];
+    var provider = S.redirectProvider.forWallet(wallet);
+    var redirectLink = window.location.origin + '/lab/wallet_transport';
+
+    S.walletOps.define('lab_probe', {
+      prepare: function () { return Promise.resolve({ transaction: 'TXB58' }); },
+      complete: function () { return Promise.resolve('done'); }
+    });
+
+    await S.walletOps.run('lab_probe', {}, {
+      provider: provider, appUrl: window.location.origin,
+      redirectLink: redirectLink, cluster: document.body.dataset.solanaCluster,
+      navigate: function (u) { urls.push(u); }
+    });
+
+    var pair = nacl.box.keyPair();
+    var dappPub = new URL(urls[0]).searchParams.get('dapp_encryption_public_key');
+    var shared = nacl.box.before(S.walletTransport.base58.decode(dappPub), pair.secretKey);
+    var n = nacl.randomBytes(24);
+    var body = new TextEncoder().encode(JSON.stringify({ public_key: 'PK', session: 'SESS' }));
+    var key = S.walletTransport.base58.encode(pair.publicKey);
+
+    // resume() is called with NO redirectLink, exactly as the real callback page
+    // calls it. If the journal did not carry the return address, hop two is built
+    // without one — which is what sent a real user to Phantom's home screen.
+    await S.walletOps.resume({
+      phantom_encryption_public_key: key,
+      solflare_encryption_public_key: key,
+      wallet_encryption_public_key: key,
+      nonce: S.walletTransport.base58.encode(n),
+      data: S.walletTransport.base58.encode(nacl.box.after(body, n, shared))
+    }, { navigate: function (u) { urls.push(u); } });
+
+    return urls[1] || null;
+  };
+
   window.labClearJournal = function () {
     window.SolanaStudio.walletJournal.clear();
   };
