@@ -21,8 +21,9 @@ require_relative "../test_helper"
 # whose regex has stopped matching passes having proved nothing, so the obvious
 # guard is a minimum heading count — but a hard-coded floor copied between repos
 # is the same vacuous pass wearing a number: set it near the current count and it
-# never fires again as the file grows past it. The floor here is derived from the file itself
-# on every run: EVERY `## ` heading below the bucket must parse as a version. If
+# never fires again as the file grows past it, and carried into a repo with
+# twenty headings it can never fire at all. The floor here is derived from the
+# file itself on every run: EVERY `## ` heading below the bucket must parse. If
 # the regex ever stops matching this repo's dialect, every heading becomes
 # unparseable at once and this fails loudly — there is no number to copy wrong
 # and no way for the parsed set to collapse quietly to zero.
