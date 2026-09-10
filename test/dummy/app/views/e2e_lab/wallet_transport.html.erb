@@ -26,6 +26,7 @@
 <main data-test="wallet-transport-lab">
   <p data-test="modules-loaded"><%= "" %></p>
   <p data-test="journal-after-return"><%= "" %></p>
+  <p data-test="session-after-return"><%= "" %></p>
   <a data-test="leave" href="/lab/guard">leave</a>
 </main>
 
@@ -65,6 +66,73 @@
 
   window.labClearJournal = function () {
     window.SolanaStudio.walletJournal.clear();
+  };
+
+  // --- the persisted wallet session ---------------------------------------
+  //
+  // The lab supplies only what a HOST owns: which user is signed in. Everything
+  // else below is the shipped walletSession and walletOps — the whole value of
+  // this tier is that a stored session and a warm trip are exercised in real
+  // browser storage across a real page death, which no node shim can stage.
+  var LAB_OWNER = 'lab-user';
+
+  // Reports whatever session survived the navigation, read back through the
+  // SHIPPED store. 'none' is a real answer here, not a missing hook.
+  (function () {
+    var s = window.SolanaStudio.walletSession.recall({
+      owner: LAB_OWNER, wallet: 'phantom', cluster: document.body.dataset.solanaCluster
+    });
+    document.querySelector('[data-test="session-after-return"]').textContent =
+      s ? s.publicKey + ':' + s.credentials.session : 'none';
+  })();
+
+  // A session as the connect callback would have left one: real keys, encoded by
+  // the gem's own base58, stored by the gem's own store.
+  window.labRememberSession = function () {
+    var S = window.SolanaStudio;
+    var b58 = S.walletTransport.base58;
+    var dapp = window.nacl.box.keyPair();
+    var wal = window.nacl.box.keyPair();
+    return S.walletSession.remember({
+      owner: LAB_OWNER,
+      wallet: 'phantom',
+      cluster: document.body.dataset.solanaCluster,
+      publicKey: 'LABADDR',
+      credentials: {
+        dappSecretKey: b58.encode(dapp.secretKey),
+        dappPublicKey: b58.encode(dapp.publicKey),
+        walletPublicKey: b58.encode(wal.publicKey),
+        session: 'LABSESSION'
+      }
+    });
+  };
+
+  // The host's logout call.
+  window.labPurge = function () { window.SolanaStudio.walletJournal.purge(); };
+
+  window.labTakeJournal = function () { return !!window.SolanaStudio.walletJournal.take(); };
+
+  // THE ONE-HOP CLAIM, EXECUTED. No session is handed to run(), so the only way
+  // this can reach signTransaction is by the gem recalling the stored one. Ask
+  // for a wallet with no stored session and the same call must connect instead,
+  // which is the scope rule observed rather than asserted about.
+  window.labWarmTrip = function (wallet) {
+    var S = window.SolanaStudio;
+    S.walletOps.reset();
+    S.walletOps.define('lab_warm', {
+      prepare: function () { return { transaction: 'TXB58' }; },
+      complete: function () { return 'done'; }
+    });
+
+    var chosen = null;
+    return S.walletOps.run('lab_warm', {}, {
+      provider: S.redirectProvider.forWallet(wallet),
+      owner: LAB_OWNER,
+      appUrl: window.location.origin,
+      redirectLink: window.location.origin + '/lab/wallet_transport',
+      cluster: document.body.dataset.solanaCluster,
+      navigate: function (url) { chosen = url; }
+    }).then(function () { return chosen; });
   };
 
   // WHICH SIGNING DEEPLINK THE GEM CHOOSES, observed without leaving the page.

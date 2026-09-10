@@ -444,6 +444,7 @@ SolanaStudio.walletOps.define('contest_entry', {
 SolanaStudio.walletOps.run('contest_entry', { contestId: 12 }, {
   provider: walletProvider.detect(),
   expectedAccount: session.address,          // optional
+  owner: currentUser.id,                     // optional — see below
   appUrl: location.origin,                   // redirect transport only
   redirectLink: location.origin + '/auth/phantom/callback',
   cluster: document.body.dataset.solanaCluster
@@ -542,13 +543,19 @@ place the two genuinely cannot be made identical:
 |---|---|---|
 | Inline | after `connect()`, **before** `prepare()` | nothing — `prepare` never runs |
 | Redirect, cold session | on the connect callback, **before** the signing hop | whatever `prepare` already minted; no signing prompt |
+| Redirect, warm session (`owner`) | locally, **before** the trip starts | nothing — the trip falls back to a connect hop |
 | Redirect, warm session (`opts.session`) | **not checked** | — |
 
 The redirect path cannot check earlier because the connect hop destroys the
 page: everything `prepare` returns must already be in the journal before the
-navigation. A warm session takes no connect hop at all, so walletOps never learns
-an account — a caller holding a session learned the address when it established
-one, and that is where the check belongs.
+navigation.
+
+A session recalled through `owner` records the address it was established for,
+so the check happens locally and costs nothing: a mismatch is a **miss**, the
+trip takes an ordinary connect hop, and the account is checked there. A session
+handed in as `opts.session` carries no address walletOps knows about, so it stays
+unchecked — a caller holding one learned the address when it established one, and
+that is where the check belongs.
 
 It is a declared **value** rather than a post-connect hook on purpose. The
 connect callback is a different document — in this ecosystem, studio-engine's
@@ -556,6 +563,78 @@ wallet callback view, which knows nothing about any consumer's flows — and
 `resume` deliberately does not require a registered handler to advance from
 connect to signing. A hook would be looked up on exactly the hop it exists to
 guard, come back empty, and be skipped in silence.
+
+#### `owner` — one hop for a returning user
+
+Sessions **never expire** on Phantom, Solflare or Backpack. All three vendors say
+so in their own docs (verified 2026-09-07; the profile table in
+`wallet_transport.js` records it per wallet). Nothing persisted one, so every
+mobile signing trip paid **two app switches** — connect, then sign — and the
+second one is where a real user's entry was lost on QA.
+
+Declare an `owner` and the connect hop's session is written down. The next trip
+skips straight to signing:
+
+```js
+SolanaStudio.walletOps.run('contest_entry', { contestId: 12 }, {
+  provider: walletProvider.detect(),
+  owner: currentUser.id,                     // string or number; an object is refused
+  cluster: document.body.dataset.solanaCluster,
+  // ...
+});
+```
+
+Omit it and every trip behaves exactly as it did before — same hops, same journal
+bytes. The session lives in `SolanaStudio.walletSession`
+(`solana_studio/wallet_journal.js`, a **separate record** from the journal: the
+journal is single-use and expires in ten minutes, a session is reusable and does
+not).
+
+**The token is opaque.** It decodes to a 64-byte signature plus JSON, and nothing
+in this gem reads any of it. The wallet is the only authority on whether a
+session is still good, so a local parse can only produce a second opinion that is
+wrong in one of two directions.
+
+##### What the host owes
+
+| Call | When | Why |
+|---|---|---|
+| `run(..., { owner, cluster })` | every trip | scopes the session; without it nothing is stored |
+| `resume(params, { owner, cluster })` | the callback page, for a **plain sign-in** connect | walletOps did not start that trip, so the owner can only come from here — and a sign-in session is what makes a user's *first* action one hop |
+| `walletJournal.purge()` | logout / user switch | sweeps both records. **A session outliving a logout is a stranger signing.** |
+
+A trip started through `run` carries its own owner in the journal, so `resume`
+needs nothing for it. The stamp is read from the journal in preference to
+`opts.owner` deliberately: the journal says who *started* the trip, and stamping
+the user who happens to be signed in when the wallet answers is the one outcome
+that could hand a session to someone who never established it.
+
+##### When the wallet refuses a stored session
+
+It can, and vendor docs name the causes: an **explicit disconnect**, a **wallet
+keypair change**, the **user switching networks**, and an **`app_url`
+blocklisting**. The refusal arrives on the signing callback — by which point the
+user has already left for their wallet and come back, so failing there loses
+whatever they were doing.
+
+So the trip does not fail. walletOps forgets the session and takes the hop it
+skipped: a connect, carrying the **same intent**, which the ordinary connect
+callback picks up and advances to signing on its own. The user pays one extra app
+switch — the two-hop cost they would have paid anyway — instead of starting over.
+
+- **`prepare()` is not re-run.** The journalled intent is reused, so a
+  prepared-transaction row minted for the first attempt is the one that gets
+  signed. Re-preparing would strand the first and mint a second for one user
+  action.
+- **Recovery happens at most once**, structurally: the retry intent carries no
+  recovery block, so a second refusal surfaces the wallet's own error.
+- **A user rejection (`4001`) is not a refusal.** The session is fine, the user
+  said no, and it reaches the caller as itself.
+
+Its lifetime ends at exactly four events — a wallet refusal, a scope change
+(different user, wallet or cluster), `purge()`, or `walletSession.forget()`.
+There is **no timer**, because inventing one would contradict the vendor fact the
+feature rests on.
 
 #### `signOnly`
 

@@ -68,6 +68,7 @@ class WalletOpsJsTest < Minitest::Test
       #{FILES.map { |f| File.read(f) }.join("\n")}
       var S = window.SolanaStudio;
       var J = S.walletJournal, O = S.walletOps, R = S.redirectProvider, T = S.walletTransport;
+      var WS = S.walletSession;
       Promise.resolve((function() { #{script} })()).then(function(v) {
         console.log(JSON.stringify(v));
       }, function(e) {
@@ -1138,5 +1139,760 @@ class WalletOpsJsTest < Minitest::Test
     assert_equal %w[connect deserialize:TX-7 sign:TX-7 serialize], result["calls"],
                  "the inline provider's send-side method must not be reached, declared or not"
     assert_equal true, result["storageUntouched"]
+  end
+
+  # --- the persisted wallet session ----------------------------------------
+  #
+  # Sessions never expire on Phantom, Solflare or Backpack. Nothing wrote one
+  # down, so every mobile signing trip paid two app switches and the second one
+  # is where a real user's entry was lost on QA. These cover the record, its
+  # scope, and the two flows that make it safe: a logout that sweeps it and a
+  # wallet that refuses it mid-trip.
+
+  # A session token is base58 of a 64-byte signature plus JSON. NOT PARSED HERE,
+  # and this asserts it by storing a string that could not survive a parse: '0',
+  # 'O', 'I' and 'l' are the four characters base58 deliberately omits, so a
+  # decode of this value throws. It must round-trip byte for byte anyway.
+  OPAQUE_TOKEN = "0OIl-not-base58-and-none-of-our-business"
+
+  def credentials(session = OPAQUE_TOKEN)
+    { "dappSecretKey" => "DSK", "dappPublicKey" => "DPK", "walletPublicKey" => "WPK", "session" => session }
+  end
+
+  def test_a_remembered_session_is_recalled_verbatim_and_never_parsed
+    result = run_js(<<~JS)
+      WS.remember({
+        owner: 'user-1', wallet: 'phantom', cluster: 'devnet', publicKey: 'ADDR',
+        credentials: #{JSON.generate(credentials)}
+      });
+      var back = WS.recall({ owner: 'user-1', wallet: 'phantom', cluster: 'devnet' });
+      return { credentials: back.credentials, publicKey: back.publicKey };
+    JS
+
+    assert_equal credentials, result["credentials"],
+                 "the session token is the WALLET's to judge — it must come back exactly as it went in, " \
+                 "and a value this store validated or decoded could not survive a non-base58 string"
+    assert_equal "ADDR", result["publicKey"]
+  end
+
+  def test_a_session_survives_the_journal_it_was_established_on
+    # THE REASON THESE ARE TWO RECORDS. `take()` clears the journal, by design —
+    # a completed trip must not be resumable. Share one record and every finished
+    # signature would take the session away with it, which is the two-hop
+    # behaviour this whole feature removes.
+    result = run_js(<<~JS)
+      J.save({ v: 1, wallet: 'phantom', step: 'connected', startedAt: Date.now() });
+      WS.remember({ owner: 'u', wallet: 'phantom', cluster: 'devnet', publicKey: 'A', credentials: #{JSON.generate(credentials)} });
+      J.take();
+      return {
+        journalGone: !J.peek(),
+        session: !!WS.recall({ owner: 'u', wallet: 'phantom', cluster: 'devnet' })
+      };
+    JS
+
+    assert_equal true, result["journalGone"], "take() must still clear the journal"
+    assert_equal true, result["session"], "a finished trip must not take the session with it"
+  end
+
+  def test_a_session_is_recalled_only_for_the_user_wallet_and_cluster_that_established_it
+    # A session outliving its scope is a stranger signing. Each miss is asserted
+    # separately so a comparison dropped from recall() names WHICH one went.
+    result = run_js(<<~JS)
+      WS.remember({ owner: 'user-1', wallet: 'phantom', cluster: 'devnet', publicKey: 'A', credentials: #{JSON.generate(credentials)} });
+      function hit(scope) { return !!WS.recall(scope); }
+      return {
+        exact:        hit({ owner: 'user-1', wallet: 'phantom',  cluster: 'devnet' }),
+        otherUser:    hit({ owner: 'user-2', wallet: 'phantom',  cluster: 'devnet' }),
+        otherWallet:  hit({ owner: 'user-1', wallet: 'solflare', cluster: 'devnet' }),
+        otherCluster: hit({ owner: 'user-1', wallet: 'phantom',  cluster: 'mainnet-beta' }),
+        anonymous:    hit({ wallet: 'phantom', cluster: 'devnet' })
+      };
+    JS
+
+    assert_equal({ "exact" => true, "otherUser" => false, "otherWallet" => false,
+                   "otherCluster" => false, "anonymous" => false }, result)
+  end
+
+  def test_an_owner_that_is_not_a_handle_is_refused_rather_than_stringified
+    # THE GUARD THAT KEEPS A SESSION FROM BECOMING EVERYONE'S. An object owner
+    # would String() to '[object Object]' — one token every user of this browser
+    # matches — so a stranger would be offered a one-hop signature with a wallet
+    # session they never established. A number IS a handle (a user id usually
+    # is one) and is kept.
+    result = run_js(<<~JS)
+      var creds = #{JSON.generate(credentials)};
+      return {
+        object:  WS.remember({ owner: {}, wallet: 'phantom', credentials: creds }),
+        array:   WS.remember({ owner: [], wallet: 'phantom', credentials: creds }),
+        blank:   WS.remember({ owner: '', wallet: 'phantom', credentials: creds }),
+        missing: WS.remember({ wallet: 'phantom', credentials: creds }),
+        number:  WS.remember({ owner: 7, wallet: 'phantom', credentials: creds }),
+        storedAfterNumber: (WS.recall({ owner: '7', wallet: 'phantom' }) || {}).owner
+      };
+    JS
+
+    assert_equal false, result["object"], "an object owner is one token every user shares"
+    assert_equal false, result["array"]
+    assert_equal false, result["blank"]
+    assert_equal false, result["missing"], "an anonymous session has nobody to scope it away from"
+    assert_equal true, result["number"], "a user id is usually a number and is a real handle"
+    assert_equal "7", result["storedAfterNumber"], "a numeric owner is compared as its string form"
+  end
+
+  def test_a_session_missing_any_credential_the_signing_hop_needs_is_refused
+    # Recalling one of these would fail inside the codec two app switches later,
+    # as a decryption error standing in for a storage bug.
+    result = run_js(<<~JS)
+      var full = #{JSON.generate(credentials)};
+      function without(k) {
+        var c = {}; for (var f in full) { if (f !== k) c[f] = full[f]; }
+        return WS.remember({ owner: 'u', wallet: 'phantom', credentials: c });
+      }
+      return {
+        noSession: without('session'), noWalletKey: without('walletPublicKey'),
+        noSecret: without('dappSecretKey'), noPublic: without('dappPublicKey'),
+        full: WS.remember({ owner: 'u', wallet: 'phantom', credentials: full })
+      };
+    JS
+
+    assert_equal({ "noSession" => false, "noWalletKey" => false, "noSecret" => false,
+                   "noPublic" => false, "full" => true }, result)
+  end
+
+  def test_a_declared_expected_account_is_honoured_before_the_trip_starts
+    # A warm trip takes no connect hop, so this is the ONLY place a declared
+    # expectation can be honoured before the user is committed. A wallet keypair
+    # change would eventually be refused by the wallet — this turns two app
+    # switches and a refusal into an immediate connect hop.
+    result = run_js(<<~JS)
+      WS.remember({ owner: 'u', wallet: 'phantom', cluster: 'devnet', publicKey: 'LINKED', credentials: #{JSON.generate(credentials)} });
+      var scope = { owner: 'u', wallet: 'phantom', cluster: 'devnet' };
+      function withAccount(a) { return { owner: 'u', wallet: 'phantom', cluster: 'devnet', expectedAccount: a }; }
+      return {
+        undeclared: !!WS.recall(scope),
+        matching:   !!WS.recall(withAccount('LINKED')),
+        different:  !!WS.recall(withAccount('STRANGER'))
+      };
+    JS
+
+    assert_equal({ "undeclared" => true, "matching" => true, "different" => false }, result)
+  end
+
+  def test_a_logout_sweeps_the_session_with_the_journal
+    # purge() is the host's logout call and the PRIMARY defence. It sweeps by
+    # PREFIX, so the session is covered by the call a host already makes — split
+    # these into two stores and a host that upgrades without adding a second call
+    # ships a session that outlives a logout.
+    result = run_js(<<~JS)
+      J.save({ v: 1, wallet: 'phantom', step: 'connect', startedAt: Date.now() });
+      WS.remember({ owner: 'u', wallet: 'phantom', cluster: 'devnet', publicKey: 'A', credentials: #{JSON.generate(credentials)} });
+      var before = !!WS.recall({ owner: 'u', wallet: 'phantom', cluster: 'devnet' });
+      J.purge();
+      return {
+        before: before,
+        session: WS.recall({ owner: 'u', wallet: 'phantom', cluster: 'devnet' }),
+        rawKeyGone: localStorage.getItem(WS.KEY),
+        journal: J.peek()
+      };
+    JS
+
+    assert_equal true, result["before"], "the session must be there to be swept, or this proves nothing"
+    assert_nil result["session"], "a session that outlives a logout lets a stranger sign"
+    assert_nil result["rawKeyGone"]
+    assert_nil result["journal"]
+  end
+
+  def test_a_session_written_by_a_different_release_reads_as_no_session
+    # THE OPPOSITE OF THE JOURNAL'S ANSWER, and deliberately. The journal THROWS
+    # on a version it does not know because a trip is in flight and carrying on
+    # would decrypt garbage. Nothing is in flight here, so "connect again" is a
+    # complete answer that costs one hop and no words.
+    result = run_js(<<~JS)
+      localStorage.setItem(WS.KEY, JSON.stringify({
+        v: WS.VERSION + 1, owner: 'u', wallet: 'phantom', cluster: 'devnet',
+        credentials: #{JSON.generate(credentials)}
+      }));
+      var recalled = WS.recall({ owner: 'u', wallet: 'phantom', cluster: 'devnet' });
+      return { recalled: recalled, cleared: !localStorage.getItem(WS.KEY) };
+    JS
+
+    assert_nil result["recalled"]
+    assert_equal true, result["cleared"], "a shape we cannot read must not be re-judged on every trip"
+  end
+
+  def test_forget_drops_the_session_and_leaves_the_journal_alone
+    result = run_js(<<~JS)
+      J.save({ v: 1, wallet: 'phantom', step: 'connect', startedAt: Date.now() });
+      WS.remember({ owner: 'u', wallet: 'phantom', cluster: 'devnet', publicKey: 'A', credentials: #{JSON.generate(credentials)} });
+      WS.forget();
+      return {
+        session: WS.recall({ owner: 'u', wallet: 'phantom', cluster: 'devnet' }),
+        journalStep: (J.peek() || {}).step
+      };
+    JS
+
+    assert_nil result["session"]
+    assert_equal "connect", result["journalStep"],
+                 "an explicit disconnect must not cancel a trip that is already in flight"
+  end
+
+  def test_run_refuses_an_owner_that_is_not_a_handle
+    result = run_js(<<~JS)
+      O.define('demo', { prepare: function() { return { transaction: 'TX' }; }, complete: function() { return 1; } });
+      return O.run('demo', {}, { provider: R.forWallet('phantom'), owner: { id: 4 } })
+        .then(function() { return 'ran'; }, function(e) { return e.message; });
+    JS
+
+    assert_includes result, "owner must be a string or number",
+                    "an object owner is a call-site bug and must be named there"
+    assert_includes result, "one token every user shares"
+  end
+
+  # --- one hop for a returning user ----------------------------------------
+
+  # The stand-in wallet app, shared by the round trips below. One stable keypair
+  # for the whole script, so a session established on the first trip is still
+  # decryptable on the second — which is the fact under test.
+  WALLET_APP = <<~JS
+    var walletPair = nacl.box.keyPair();
+    function sharedFor(url) {
+      var dappPub = new URL(url).searchParams.get('dapp_encryption_public_key');
+      return nacl.box.before(T.base58.decode(dappPub), walletPair.secretKey);
+    }
+    function walletAnswers(url, body) {
+      var shared = sharedFor(url);
+      var n = nacl.randomBytes(24);
+      return {
+        phantom_encryption_public_key: T.base58.encode(walletPair.publicKey),
+        nonce: T.base58.encode(n),
+        data: T.base58.encode(nacl.box.after(new TextEncoder().encode(JSON.stringify(body)), n, shared))
+      };
+    }
+    function walletRefuses(code, message) {
+      return { errorCode: code, errorMessage: message };
+    }
+    function payloadOf(url) {
+      var u = new URL(url);
+      return JSON.parse(new TextDecoder().decode(nacl.box.open.after(
+        T.base58.decode(u.searchParams.get('payload')),
+        T.base58.decode(u.searchParams.get('nonce')),
+        sharedFor(url)
+      )));
+    }
+  JS
+
+  def test_a_returning_user_signs_in_one_hop
+    # THE ACCEPTANCE CRITERION, end to end across four page deaths. The first
+    # trip is cold and pays connect-then-sign. The second, with the same owner,
+    # goes STRAIGHT to signTransaction carrying the session the first trip
+    # established — which is the app switch this feature buys back.
+    require_nacl!
+    result = run_js(<<~JS, nacl: true)
+      #{WALLET_APP}
+      var completions = [];
+      O.define('entry', {
+        prepare: function(ctx) { return { transaction: 'TX-' + ctx.n, slug: 'ptx-' + ctx.n }; },
+        complete: function(ctx, r, state) { completions.push(state.slug); return 'entered-' + ctx.n; }
+      });
+
+      var urls = [];
+      function opts() {
+        return {
+          provider: R.forWallet('phantom'), owner: 'user-1',
+          appUrl: 'https://a.test', redirectLink: 'https://a.test/cb', cluster: 'devnet',
+          navigate: function(u) { urls.push(u); }
+        };
+      }
+      var resumeOpts = { redirectLink: 'https://a.test/cb', navigate: function(u) { urls.push(u); } };
+
+      // --- TRIP ONE: cold. connect, then sign. ---
+      return O.run('entry', { n: 1 }, opts()).then(function() {
+        return O.resume(walletAnswers(urls[0], { public_key: 'USERPK', session: 'SESS-1' }), resumeOpts);
+      }).then(function() {
+        return O.resume(walletAnswers(urls[1], { transaction: 'SIGNED-1' }), resumeOpts);
+      }).then(function(firstDone) {
+        // --- TRIP TWO: the same user, later. ---
+        return O.run('entry', { n: 2 }, opts()).then(function() {
+          var warmUrl = urls[2];
+          return O.resume(walletAnswers(warmUrl, { transaction: 'SIGNED-2' }), resumeOpts).then(function(secondDone) {
+            return {
+              coldHops: [urls[0].split('?')[0], urls[1].split('?')[0]],
+              warmHop: warmUrl.split('?')[0],
+              totalUrls: urls.length,
+              sessionSentWarm: payloadOf(warmUrl).session,
+              transactionSentWarm: payloadOf(warmUrl).transaction,
+              firstValue: firstDone.value,
+              secondValue: secondDone.value,
+              completions: completions,
+              storedAddress: WS.recall({ owner: 'user-1', wallet: 'phantom', cluster: 'devnet' }).publicKey
+            };
+          });
+        });
+      });
+    JS
+
+    refute result["__error"], "flow errored: #{result['__error']}"
+    assert_equal ["https://phantom.app/ul/v1/connect", "https://phantom.app/ul/v1/signTransaction"],
+                 result["coldHops"], "the first trip is still connect then sign"
+    assert_equal "https://phantom.app/ul/v1/signTransaction", result["warmHop"],
+                 "a returning user must go straight to signing — this is the app switch the feature buys back"
+    assert_equal 3, result["totalUrls"], "two hops then ONE, not two then two"
+    assert_equal "SESS-1", result["sessionSentWarm"],
+                 "the warm hop must carry the session the connect hop established"
+    assert_equal "TX-2", result["transactionSentWarm"], "and the SECOND trip's own transaction"
+    assert_equal "entered-1", result["firstValue"]
+    assert_equal "entered-2", result["secondValue"]
+    assert_equal %w[ptx-1 ptx-2], result["completions"]
+    assert_equal "USERPK", result["storedAddress"], "the session records which account it signs as"
+  end
+
+  def test_a_trip_that_declares_no_owner_is_unchanged
+    # THE FREE BRANCH. Every existing consumer is on it: no owner, no session, no
+    # new journal fields. `intent` must serialise to exactly what it did before
+    # this feature existed, because a journal shape that moved without
+    # JOURNAL_VERSION moving is a callback decrypting garbage.
+    require_nacl!
+    result = run_js(<<~JS, nacl: true)
+      #{WALLET_APP}
+      O.define('entry', {
+        prepare: function() { return { transaction: 'TX' }; },
+        complete: function() { return 'done'; }
+      });
+      var urls = [];
+      var opts = {
+        provider: R.forWallet('phantom'),
+        appUrl: 'https://a.test', redirectLink: 'https://a.test/cb', cluster: 'devnet',
+        navigate: function(u) { urls.push(u); }
+      };
+      return O.run('entry', { n: 1 }, opts).then(function() {
+        var intentKeys = Object.keys(J.peek().intent).sort();
+        return O.resume(walletAnswers(urls[0], { public_key: 'PK', session: 'S' }), opts).then(function() {
+          return {
+            intentKeys: intentKeys,
+            connectedIntentKeys: Object.keys(J.peek().intent).sort(),
+            hops: urls.length,
+            storedSession: localStorage.getItem(WS.KEY)
+          };
+        });
+      });
+    JS
+
+    refute result["__error"], "flow errored: #{result['__error']}"
+    assert_equal %w[ctx op state], result["intentKeys"],
+                 "an undeclared owner must add NOTHING to the journal — scope and recovery are opt-in"
+    assert_equal %w[ctx op state], result["connectedIntentKeys"]
+    assert_equal 2, result["hops"], "without an owner the trip is still connect then sign"
+    assert_nil result["storedSession"], "a trip with nobody to scope a session to must not store one"
+  end
+
+  # --- a session the wallet refuses mid-trip -------------------------------
+
+  def test_a_refused_session_recovers_through_connect_without_losing_the_entry
+    # THE FLOW THE VENDORS FORCE. A stored session can be refused mid-trip — an
+    # explicit disconnect, a keypair change, a network switch, an app_url
+    # blocklisting — and by then the user has already left for their wallet and
+    # come back. Failing there loses their entry, which is the loss this epic
+    # exists to remove. So the trip takes the hop it skipped and finishes.
+    #
+    # prepare() MUST NOT RUN AGAIN: it mints a prepared transaction, and a second
+    # one would strand the first and charge the flow twice for one user action.
+    require_nacl!
+    result = run_js(<<~JS, nacl: true)
+      #{WALLET_APP}
+      var prepares = 0;
+      O.define('entry', {
+        prepare: function(ctx) { prepares++; return { transaction: 'TX-' + ctx.n, slug: 'ptx-' + prepares }; },
+        complete: function(ctx, r, state) { return { slug: state.slug, signed: r.signedTransaction }; }
+      });
+
+      var urls = [];
+      var nav = function(u) { urls.push(u); };
+      var resumeOpts = { redirectLink: 'https://a.test/cb', navigate: nav };
+
+      // A session established earlier — by a previous trip, on a previous day.
+      WS.remember({
+        owner: 'user-1', wallet: 'phantom', cluster: 'devnet', publicKey: 'USERPK',
+        credentials: {
+          dappSecretKey: T.base58.encode(nacl.box.keyPair().secretKey),
+          dappPublicKey: 'DPK', walletPublicKey: T.base58.encode(walletPair.publicKey),
+          session: 'STALE-SESSION'
+        }
+      });
+
+      return O.run('entry', { n: 9 }, {
+        provider: R.forWallet('phantom'), owner: 'user-1',
+        appUrl: 'https://a.test', redirectLink: 'https://a.test/cb', cluster: 'devnet',
+        navigate: nav
+      }).then(function() {
+        // The wallet REFUSES the stored session.
+        return O.resume(walletRefuses('4900', 'Disconnected'), resumeOpts);
+      }).then(function(afterRefusal) {
+        // Recovered onto a connect hop. The ordinary connect callback advances it.
+        return O.resume(walletAnswers(urls[1], { public_key: 'USERPK', session: 'FRESH' }), resumeOpts)
+          .then(function() {
+            return O.resume(walletAnswers(urls[2], { transaction: 'SIGNED' }), resumeOpts).then(function(done) {
+              return {
+                firstHop: urls[0].split('?')[0],
+                recoveredHop: urls[1].split('?')[0],
+                finalHop: urls[2].split('?')[0],
+                recovered: !!afterRefusal.recovered,
+                prepares: prepares,
+                value: done.value,
+                sessionSentFinal: payloadOf(urls[2]).session,
+                transactionSentFinal: payloadOf(urls[2]).transaction,
+                storedNow: (WS.recall({ owner: 'user-1', wallet: 'phantom', cluster: 'devnet' }) || {}).credentials
+              };
+            });
+          });
+      });
+    JS
+
+    refute result["__error"], "flow errored: #{result['__error']}"
+    assert_equal "https://phantom.app/ul/v1/signTransaction", result["firstHop"],
+                 "the warm trip must skip connect, or there is nothing to recover from"
+    assert_equal "https://phantom.app/ul/v1/connect", result["recoveredHop"],
+                 "a refused session must take the hop it skipped, not end the trip"
+    assert_equal true, result["recovered"]
+    assert_equal "https://phantom.app/ul/v1/signTransaction", result["finalHop"]
+    assert_equal 1, result["prepares"],
+                 "prepare mints a prepared transaction — recovery must reuse the journalled one, not mint a second"
+    assert_equal({ "slug" => "ptx-1", "signed" => "SIGNED" }, result["value"],
+                 "the user's entry must complete on the SAME prepared transaction")
+    assert_equal "FRESH", result["sessionSentFinal"], "the recovered trip signs with the new session"
+    assert_equal "TX-9", result["transactionSentFinal"]
+    assert_equal "FRESH", result["storedNow"]["session"],
+                 "the refused session must be replaced, not left to be recalled into the same refusal"
+  end
+
+  def test_a_user_rejection_is_not_a_refused_session
+    # 4001 is the user saying no. Their session is perfectly good, and sending
+    # them back to their wallet for another look is hostile. The rejection must
+    # reach the caller as itself.
+    require_nacl!
+    result = run_js(<<~JS, nacl: true)
+      #{WALLET_APP}
+      O.define('entry', {
+        prepare: function() { return { transaction: 'TX' }; },
+        complete: function() { return 'done'; }
+      });
+      var urls = [];
+      var nav = function(u) { urls.push(u); };
+      WS.remember({
+        owner: 'u', wallet: 'phantom', cluster: 'devnet', publicKey: 'PK',
+        credentials: {
+          dappSecretKey: T.base58.encode(nacl.box.keyPair().secretKey),
+          dappPublicKey: 'DPK', walletPublicKey: T.base58.encode(walletPair.publicKey), session: 'SESS'
+        }
+      });
+      return O.run('entry', {}, {
+        provider: R.forWallet('phantom'), owner: 'u',
+        appUrl: 'https://a.test', redirectLink: 'https://a.test/cb', cluster: 'devnet', navigate: nav
+      }).then(function() {
+        return O.resume(walletRefuses('4001', 'User rejected the request.'), { navigate: nav })
+          .then(function() { return { outcome: 'advanced' }; }, function(e) {
+            return {
+              outcome: 'refused', message: e.message, code: e.code, rejected: !!e.rejected,
+              hops: urls.length,
+              stillStored: (WS.recall({ owner: 'u', wallet: 'phantom', cluster: 'devnet' }) || {}).credentials
+            };
+          });
+      });
+    JS
+
+    refute result["__error"], "flow errored: #{result['__error']}"
+    assert_equal "refused", result["outcome"], "a user rejection must reach the caller, not start another trip"
+    assert_equal "User rejected the request.", result["message"]
+    assert_equal "4001", result["code"]
+    assert_equal true, result["rejected"]
+    assert_equal 1, result["hops"], "no recovery hop may be taken — the user said no"
+    assert_equal "SESS", result["stillStored"]["session"],
+                 "a declined signature does not invalidate the session"
+  end
+
+  def test_recovery_is_taken_at_most_once
+    # BOUNDED BY SHAPE, NOT BY A COUNTER. The retry intent carries `scope` but
+    # NOT `recovery`, so the hop it produces has nothing to recover to and a
+    # second refusal surfaces the wallet's own words. A counter would be a field
+    # somebody forgets to decrement.
+    require_nacl!
+    result = run_js(<<~JS, nacl: true)
+      #{WALLET_APP}
+      O.define('entry', {
+        prepare: function() { return { transaction: 'TX' }; },
+        complete: function() { return 'done'; }
+      });
+      var urls = [];
+      var nav = function(u) { urls.push(u); };
+      var resumeOpts = { redirectLink: 'https://a.test/cb', navigate: nav };
+      WS.remember({
+        owner: 'u', wallet: 'phantom', cluster: 'devnet', publicKey: 'PK',
+        credentials: {
+          dappSecretKey: T.base58.encode(nacl.box.keyPair().secretKey),
+          dappPublicKey: 'DPK', walletPublicKey: T.base58.encode(walletPair.publicKey), session: 'SESS'
+        }
+      });
+      return O.run('entry', {}, {
+        provider: R.forWallet('phantom'), owner: 'u',
+        appUrl: 'https://a.test', redirectLink: 'https://a.test/cb', cluster: 'devnet', navigate: nav
+      }).then(function() {
+        return O.resume(walletRefuses('4900', 'Disconnected'), resumeOpts);
+      }).then(function() {
+        return O.resume(walletAnswers(urls[1], { public_key: 'PK', session: 'FRESH' }), resumeOpts);
+      }).then(function() {
+        var retryIntent = J.peek().intent;
+        // The wallet refuses AGAIN, this time on the recovered trip.
+        return O.resume(walletRefuses('4900', 'Disconnected'), resumeOpts)
+          .then(function(v) { return { outcome: 'advanced', v: v, hops: urls.length }; }, function(e) {
+            return {
+              outcome: 'refused', message: e.message, code: e.code,
+              hops: urls.length,
+              retryIntentKeys: Object.keys(retryIntent).sort()
+            };
+          });
+      });
+    JS
+
+    refute result["__error"], "flow errored: #{result['__error']}"
+    assert_equal "refused", result["outcome"],
+                 "a second refusal must surface the wallet's error, not loop the user through connect again"
+    assert_equal "Disconnected", result["message"]
+    assert_equal "4900", result["code"]
+    assert_equal 3, result["hops"], "sign, connect, sign — and then stop"
+    assert_equal %w[ctx op scope state], result["retryIntentKeys"],
+                 "the retry keeps its scope and drops `recovery` — that omission IS the bound"
+  end
+
+  def test_a_payload_that_will_not_decrypt_is_not_treated_as_a_refused_session
+    # THE OTHER HALF OF THE RECOVERY RULE. A decryption failure carries no
+    # `code`: no vendor documents it as a refusal channel, and a corrupt payload
+    # is a different finding that must read as itself. Widening the rule to "any
+    # throw" would put every crypto fault behind a wallet round trip and report
+    # it, eventually, as a session problem.
+    require_nacl!
+    result = run_js(<<~JS, nacl: true)
+      #{WALLET_APP}
+      O.define('entry', {
+        prepare: function() { return { transaction: 'TX' }; },
+        complete: function() { return 'done'; }
+      });
+      var urls = [];
+      var nav = function(u) { urls.push(u); };
+      WS.remember({
+        owner: 'u', wallet: 'phantom', cluster: 'devnet', publicKey: 'PK',
+        credentials: {
+          dappSecretKey: T.base58.encode(nacl.box.keyPair().secretKey),
+          dappPublicKey: 'DPK', walletPublicKey: T.base58.encode(walletPair.publicKey), session: 'SESS'
+        }
+      });
+      return O.run('entry', {}, {
+        provider: R.forWallet('phantom'), owner: 'u',
+        appUrl: 'https://a.test', redirectLink: 'https://a.test/cb', cluster: 'devnet', navigate: nav
+      }).then(function() {
+        // A well-formed redirect whose payload was sealed with the WRONG secret.
+        var stranger = nacl.box.before(T.base58.decode(T.base58.encode(nacl.box.keyPair().publicKey)),
+                                       nacl.box.keyPair().secretKey);
+        var n = nacl.randomBytes(24);
+        var junk = {
+          nonce: T.base58.encode(n),
+          data: T.base58.encode(nacl.box.after(new TextEncoder().encode('{}'), n, stranger))
+        };
+        return O.resume(junk, { redirectLink: 'https://a.test/cb', navigate: nav })
+          .then(function() { return { outcome: 'advanced' }; }, function(e) {
+            return { outcome: 'refused', message: e.message, hops: urls.length };
+          });
+      });
+    JS
+
+    refute result["__error"], "flow errored: #{result['__error']}"
+    assert_equal "refused", result["outcome"]
+    assert_equal "Decryption failed — wrong shared secret or corrupt payload", result["message"],
+                 "a crypto fault must reach the caller as itself, not as a session refusal"
+    assert_equal 1, result["hops"], "and it must not spend a connect hop discovering that"
+  end
+
+  def test_an_abandoned_recovery_leaves_no_session_to_waste_the_next_trip_on
+    # WHY RECOVERY FORGETS BEFORE IT NAVIGATES. The recovered connect usually
+    # replaces the session, which hides the forget. It stops hiding it when the
+    # user abandons the trip in their wallet: without the forget, the refused
+    # session is still stored, the NEXT trip recalls it, and the user pays a
+    # wasted round trip to be refused all over again.
+    require_nacl!
+    result = run_js(<<~JS, nacl: true)
+      #{WALLET_APP}
+      O.define('entry', {
+        prepare: function() { return { transaction: 'TX' }; },
+        complete: function() { return 'done'; }
+      });
+      var urls = [];
+      var nav = function(u) { urls.push(u); };
+      function opts() {
+        return {
+          provider: R.forWallet('phantom'), owner: 'u',
+          appUrl: 'https://a.test', redirectLink: 'https://a.test/cb', cluster: 'devnet', navigate: nav
+        };
+      }
+      WS.remember({
+        owner: 'u', wallet: 'phantom', cluster: 'devnet', publicKey: 'PK',
+        credentials: {
+          dappSecretKey: T.base58.encode(nacl.box.keyPair().secretKey),
+          dappPublicKey: 'DPK', walletPublicKey: T.base58.encode(walletPair.publicKey), session: 'STALE'
+        }
+      });
+      return O.run('entry', {}, opts()).then(function() {
+        return O.resume(walletRefuses('4900', 'Disconnected'), { redirectLink: 'https://a.test/cb', navigate: nav });
+      }).then(function() {
+        // The user never comes back from the wallet. Later, they start again.
+        J.clear();
+        return O.run('entry', {}, opts()).then(function() {
+          return {
+            recalled: !!WS.recall({ owner: 'u', wallet: 'phantom', cluster: 'devnet' }),
+            nextTripHop: urls[urls.length - 1].split('?')[0]
+          };
+        });
+      });
+    JS
+
+    refute result["__error"], "flow errored: #{result['__error']}"
+    assert_equal false, result["recalled"], "a session the wallet refused must not be kept"
+    assert_equal "https://phantom.app/ul/v1/connect", result["nextTripHop"],
+                 "the next trip must start cold rather than spend a round trip on a session already refused"
+  end
+
+  def test_a_cold_trip_refused_by_the_wallet_reports_what_the_wallet_said
+    # A trip that already took its connect hop has nothing better to fall back
+    # on. Recovering it would be a second connect for a wallet that just spoke.
+    require_nacl!
+    result = run_js(<<~JS, nacl: true)
+      #{WALLET_APP}
+      O.define('entry', {
+        prepare: function() { return { transaction: 'TX' }; },
+        complete: function() { return 'done'; }
+      });
+      var urls = [];
+      var nav = function(u) { urls.push(u); };
+      var resumeOpts = { redirectLink: 'https://a.test/cb', navigate: nav };
+      return O.run('entry', {}, {
+        provider: R.forWallet('phantom'), owner: 'u',
+        appUrl: 'https://a.test', redirectLink: 'https://a.test/cb', cluster: 'devnet', navigate: nav
+      }).then(function() {
+        return O.resume(walletAnswers(urls[0], { public_key: 'PK', session: 'SESS' }), resumeOpts);
+      }).then(function() {
+        return O.resume(walletRefuses('-32603', 'Something went wrong'), resumeOpts)
+          .then(function() { return { outcome: 'advanced' }; }, function(e) {
+            return { outcome: 'refused', message: e.message, hops: urls.length };
+          });
+      });
+    JS
+
+    refute result["__error"], "flow errored: #{result['__error']}"
+    assert_equal "refused", result["outcome"]
+    assert_equal "Something went wrong", result["message"],
+                 "a cold trip's failure is the wallet's own words, unchanged by this feature"
+    assert_equal 2, result["hops"], "connect and sign — no third hop"
+  end
+
+  def test_a_wrong_wallet_on_the_connect_callback_stores_no_session
+    # A session stored for an account the caller has already refused could only
+    # ever be recalled into the same refusal — and storing it would evict the
+    # session belonging to the RIGHT wallet.
+    require_nacl!
+    result = run_js(<<~JS, nacl: true)
+      #{WALLET_APP}
+      O.define('entry', {
+        prepare: function() { return { transaction: 'TX' }; },
+        complete: function() { return 'done'; }
+      });
+      var urls = [];
+      var nav = function(u) { urls.push(u); };
+      return O.run('entry', {}, {
+        provider: R.forWallet('phantom'), owner: 'u', expectedAccount: 'LINKEDPK',
+        appUrl: 'https://a.test', redirectLink: 'https://a.test/cb', cluster: 'devnet', navigate: nav
+      }).then(function() {
+        return O.resume(walletAnswers(urls[0], { public_key: 'STRANGERPK', session: 'SESS' }), { navigate: nav })
+          .then(function() { return { outcome: 'advanced' }; }, function(e) {
+            return {
+              outcome: 'refused', wrongAccount: !!e.wrongAccount,
+              stored: localStorage.getItem(WS.KEY), hops: urls.length
+            };
+          });
+      });
+    JS
+
+    refute result["__error"], "flow errored: #{result['__error']}"
+    assert_equal "refused", result["outcome"]
+    assert_equal true, result["wrongAccount"]
+    assert_nil result["stored"], "a refused account's session must not be remembered"
+    assert_equal 1, result["hops"], "and no signing hop is taken"
+  end
+
+  def test_the_session_is_stamped_with_who_started_the_trip
+    # THE SAFER OF THE TWO AVAILABLE READS, and the reason `scope` is journalled
+    # rather than taken from the callback page. The journal says who STARTED the
+    # trip; opts says who is signed in when the wallet answers. Stamping the
+    # current user onto a wallet session someone else established is the one
+    # outcome that lets a stranger sign; stamping the originator cannot.
+    require_nacl!
+    result = run_js(<<~JS, nacl: true)
+      #{WALLET_APP}
+      O.define('entry', {
+        prepare: function() { return { transaction: 'TX' }; },
+        complete: function() { return 'done'; }
+      });
+      var urls = [];
+      var nav = function(u) { urls.push(u); };
+      return O.run('entry', {}, {
+        provider: R.forWallet('phantom'), owner: 'starter',
+        appUrl: 'https://a.test', redirectLink: 'https://a.test/cb', cluster: 'devnet', navigate: nav
+      }).then(function() {
+        // The callback page believes someone else is signed in.
+        return O.resume(walletAnswers(urls[0], { public_key: 'PK', session: 'SESS' }),
+                        { redirectLink: 'https://a.test/cb', navigate: nav, owner: 'bystander' });
+      }).then(function() {
+        return {
+          starter: !!WS.recall({ owner: 'starter', wallet: 'phantom', cluster: 'devnet' }),
+          bystander: !!WS.recall({ owner: 'bystander', wallet: 'phantom', cluster: 'devnet' })
+        };
+      });
+    JS
+
+    refute result["__error"], "flow errored: #{result['__error']}"
+    assert_equal true, result["starter"], "the session belongs to whoever started the trip"
+    assert_equal false, result["bystander"],
+                 "the page's current user must not inherit a session someone else established"
+  end
+
+  def test_a_host_initiated_sign_in_connect_is_remembered_from_opts
+    # THE MOST VALUABLE SESSION THERE IS: the plain sign-in every user does
+    # before they ever ask to sign anything. walletOps did not start this trip —
+    # the host did, straight through the provider — so the owner can only come
+    # from resume's opts. Remembering it here is what makes a returning user's
+    # FIRST action one hop rather than their second.
+    require_nacl!
+    result = run_js(<<~JS, nacl: true)
+      #{WALLET_APP}
+      var provider = R.forWallet('phantom');
+      var begun = provider.beginConnect({
+        appUrl: 'https://a.test', redirectLink: 'https://a.test/cb', cluster: 'devnet'
+      });
+      J.save(begun.journal);
+      return O.resume(walletAnswers(begun.url, { public_key: 'USERPK', session: 'SIGNIN' }),
+                      { owner: 'user-1', cluster: 'devnet' }).then(function(out) {
+        var stored = WS.recall({ owner: 'user-1', wallet: 'phantom', cluster: 'devnet' });
+        return {
+          done: out.done, address: out.connect.publicKey,
+          session: stored && stored.credentials.session,
+          address_stored: stored && stored.publicKey,
+          withoutCluster: !!WS.recall({ owner: 'user-1', wallet: 'phantom' })
+        };
+      });
+    JS
+
+    refute result["__error"], "flow errored: #{result['__error']}"
+    assert_equal true, result["done"]
+    assert_equal "USERPK", result["address"]
+    assert_equal "SIGNIN", result["session"], "a sign-in connect must leave a session behind it"
+    assert_equal "USERPK", result["address_stored"]
+    assert_equal false, result["withoutCluster"],
+                 "and it is scoped to the cluster it was established on"
   end
 end
