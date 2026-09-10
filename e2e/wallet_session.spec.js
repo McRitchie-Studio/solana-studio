@@ -27,7 +27,10 @@ test.beforeEach(async ({ page }) => {
 // behaviour the feature exists to remove, and it would look perfectly fine in
 // every node suite that kept the store in a variable.
 test("a session outlives the journal it was established on, across a real navigation", async ({ page }) => {
-  await page.evaluate(() => window.labRememberSession());
+  // remember() reports whether the write actually stuck. Discarding it lets a
+  // quota or private-mode refusal surface later as a confusing recall miss, in a
+  // spec about something else.
+  expect(await page.evaluate(() => window.labRememberSession())).toBe(true);
   await page.evaluate(() => window.labBeginConnect("phantom"));
 
   // The completed trip takes its journal, exactly as a callback page does.
@@ -49,7 +52,7 @@ test("a session outlives the journal it was established on, across a real naviga
 // so a change that returned a session for any scope would satisfy the first
 // assertion alone.
 test("a returning user goes straight to signing, and an unknown wallet still connects", async ({ page }) => {
-  await page.evaluate(() => window.labRememberSession());
+  expect(await page.evaluate(() => window.labRememberSession())).toBe(true);
 
   const warm = await page.evaluate(() => window.labWarmTrip("phantom"));
   const cold = await page.evaluate(() => window.labWarmTrip("solflare"));
@@ -64,8 +67,12 @@ test("a returning user goes straight to signing, and an unknown wallet still con
 // LABADDR:LABSESSION after a sign-out — a stranger at this browser offered a
 // one-hop signature with a wallet session they never established.
 test("a logout clears the session from real browser storage", async ({ page }) => {
-  await page.evaluate(() => window.labRememberSession());
-  await expect(page.locator('[data-test="session-after-return"]')).toHaveText("none"); // not yet re-read
+  // The readout is painted once, on load. Asserting "none" against it BEFORE a
+  // reload would only prove that remember() does not repaint the page, which is
+  // true of every possible implementation — so the setup is asserted through
+  // remember()'s own return value instead, and the readout is only read on a
+  // document that was built after the write.
+  expect(await page.evaluate(() => window.labRememberSession())).toBe(true);
 
   await page.goto("/lab/wallet_transport");
   await expect(page.locator('[data-test="session-after-return"]')).toHaveText("LABADDR:LABSESSION");

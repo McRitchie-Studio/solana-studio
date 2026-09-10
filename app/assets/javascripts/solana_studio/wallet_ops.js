@@ -23,7 +23,8 @@
 //
 // ONE HOP FOR A RETURNING USER — WHAT `owner` BUYS. Sessions never expire on
 // Phantom, Solflare or Backpack (all three vendors' docs, verified 2026-09-07,
-// recorded in wallet_transport.js's profile table). Nothing persisted one, so
+// recorded per wallet as `sessionsExpire: false` in wallet_transport.js's
+// PROFILES table, each with the doc URL it came from). Nothing persisted one, so
 // every mobile signing trip paid TWO app switches — connect, then sign — and the
 // second one is where a real user's entry was lost on QA. Declare an `owner` and
 // the connect hop's session is remembered, scoped to that user, that wallet and
@@ -31,11 +32,17 @@
 // behaves exactly as it did before, journal bytes included.
 //
 // The session lives in SolanaStudio.walletSession (wallet_journal.js), which
-// documents its own lifetime and the four things that invalidate it. Two of them
-// are this file's to handle and are handled below: a wallet that refuses a
-// stored session mid-trip recovers through a connect hop rather than losing the
-// user's work (recoverThroughConnect), and a host that logs a user out calls
-// walletJournal.purge(), which sweeps the session with the journal.
+// documents its own lifetime and the four things that invalidate it. One of them
+// is this file's to handle and is handled below: a wallet that refuses a stored
+// session mid-trip recovers through a connect hop rather than losing the user's
+// work (recoverThroughConnect).
+//
+// ⚠ ANOTHER IS THE HOST'S AND IS NOT WIRED UP TODAY. A logout must call
+// walletJournal.purge(), which sweeps the session with the journal — and no
+// consumer does: turf-monster sweeps the older `phantom_dl_` prefix, which does
+// not match this subsystem's `wallet_dl_`. Passing `owner` without adding that
+// call leaves a never-expiring session, and the dapp secret key beside it,
+// alive across a logout on a shared device. Adopt them together.
 //
 // `signOnly` IS A REQUIREMENT OF THE TRANSACTION, NOT A PREFERENCE ABOUT THE
 // WALLET, and it is the intent's to declare because only the intent knows the
@@ -390,6 +397,12 @@
       // literal: walletSession recalls the stored session for this exact
       // (owner, wallet, cluster), and a returning user signs in ONE hop.
       var existing = opts.session || null;
+      // WHETHER *WE* RECALLED IT, which is a different question from "is there a
+      // session". A caller that hands in `opts.session` owns that session: this
+      // file did not store it, has no record of it, and must not offer to
+      // recover or forget it. Recovery is a service for the sessions walletOps
+      // itself recalled, and this flag is what keeps the two apart.
+      var recalled = false;
       if (!existing && opts.owner) {
         var stored = studio().walletSession.recall({
           owner: opts.owner,
@@ -401,7 +414,7 @@
           // falls through to the connect hop below and is checked there.
           expectedAccount: opts.expectedAccount
         });
-        if (stored) existing = stored.credentials;
+        if (stored) { existing = stored.credentials; recalled = true; }
       }
 
       // A TRIP THAT SKIPS THE CONNECT HOP HAS NO CONNECT HOP TO FALL BACK ON,
@@ -423,19 +436,24 @@
       //              read: the session belongs to whoever started the trip, not
       //              to whoever happens to be signed in at the browser when the
       //              wallet answers.
-      //   recovery — only on a trip that SKIPPED the connect hop, because that
-      //              is the only trip with no connect hop behind it. The retry
-      //              keeps scope and drops recovery, which is what bounds
-      //              recovery to once. See recoverThroughConnect.
+      //   recovery — only on a trip that skipped the connect hop USING A SESSION
+      //              WE RECALLED. Gated on `recalled`, not on `existing`: a
+      //              caller-supplied `opts.session` also skips the hop, but this
+      //              file has no record of it, so forgetting it would evict a
+      //              DIFFERENT scope's session and the recovery would have no
+      //              cluster to rebuild the connect with. The retry keeps scope
+      //              and drops recovery, which bounds recovery to once. See
+      //              recoverThroughConnect.
       //
       // Both set ONLY when the new options are used, so a caller that declares
       // no owner writes a journal byte-identical to the one it wrote before this
-      // feature existed. Same rule signOnly follows, and the same reason
-      // JOURNAL_VERSION does not move.
+      // feature existed — INCLUDING one that supplies its own `opts.session`,
+      // which is the case the `existing` gate used to get wrong. Same rule
+      // signOnly follows, and the same reason JOURNAL_VERSION does not move.
       if (opts.owner) {
         intent.scope = { owner: String(opts.owner), cluster: scopeCluster(opts.cluster) };
       }
-      if (existing) {
+      if (recalled) {
         intent.recovery = { appUrl: opts.appUrl || null, redirectLink: opts.redirectLink || null };
       }
 
@@ -582,21 +600,42 @@
   function recoverThroughConnect(provider, journal, opts, navigate) {
     var intent = journal.intent;
     var recovery = intent && intent.recovery;
-    // No recovery block means this trip already had a connect hop. There is
-    // nothing better to do than report what the wallet said.
+    // No recovery block means this trip already had a connect hop, or ran on a
+    // session this file never stored. There is nothing better to do than report
+    // what the wallet said.
     if (!recovery) return null;
 
+    // A recovery block is only ever written beside a scope (both come from the
+    // same recall), so this is unreachable from a journal THIS release wrote.
+    // It is checked anyway because the alternative is silent and expensive: the
+    // cluster below would be null, `query()` drops a null, and the wallet would
+    // default the recovered connect to MAINNET-BETA — real funds on a trip that
+    // began on devnet. A journal from an older release is exactly the way that
+    // becomes reachable.
+    if (!intent.scope) return null;
+
+    // The redirect link is what the wallet returns to. Since #44, url.connect
+    // REFUSES to build without one, and that throw would escape this function
+    // and reach the user INSTEAD of the wallet's own error — a worse report
+    // about a different subject. Answer null and let the wallet speak.
+    var redirectLink = opts.redirectLink || recovery.redirectLink;
+    if (!redirectLink) return null;
+
+    // Only now, once the retry is certain to be buildable. Forgetting before
+    // this point would drop the session on a trip that then reports the wallet's
+    // error anyway, costing the user a stored session for nothing.
     studio().walletSession.forget();
 
     var again = { op: intent.op, ctx: intent.ctx, state: intent.state };
     if (intent.signOnly) again.signOnly = true;
     if (intent.expectedAccount) again.expectedAccount = intent.expectedAccount;
-    if (intent.scope) again.scope = intent.scope;
+    again.scope = intent.scope;
 
     var begun = provider.beginConnect({
       appUrl: recovery.appUrl,
-      redirectLink: opts.redirectLink || recovery.redirectLink,
-      cluster: intent.scope ? intent.scope.cluster : null,
+      redirectLink: redirectLink,
+      // THE CLUSTER THE TRIP BEGAN ON, never null. See the scope guard above.
+      cluster: intent.scope.cluster,
       intent: again
     });
 

@@ -1662,6 +1662,203 @@ class WalletOpsJsTest < Minitest::Test
                  "the retry keeps its scope and drops `recovery` — that omission IS the bound"
   end
 
+  def test_a_caller_supplied_session_is_left_entirely_alone
+    # THE OTHER "SKIPS THE CONNECT HOP" TRIP, and it is NOT ours to manage. A
+    # caller handing in `opts.session` stored that session itself; this file has
+    # no record of it. So it gets no recovery block (we could not rebuild the
+    # connect: no scope, so no cluster — and a null cluster is DROPPED from the
+    # query, defaulting the wallet to mainnet-beta) and no forget (which would
+    # evict a DIFFERENT scope's stored session).
+    #
+    # This is also what makes "omit owner and the journal is byte-identical"
+    # true. Gating on `existing` rather than on a session we RECALLED wrote a
+    # recovery block onto this trip, and the claim was false for it.
+    require_nacl!
+    result = run_js(<<~JS, nacl: true)
+      #{WALLET_APP}
+      O.define('entry', {
+        prepare: function() { return { transaction: 'TX' }; },
+        complete: function() { return 'done'; }
+      });
+      var urls = [];
+      var nav = function(u) { urls.push(u); };
+
+      // A session belonging to somebody else's scope, stored by this gem.
+      WS.remember({
+        owner: 'other-user', wallet: 'phantom', cluster: 'devnet', publicKey: 'OTHER',
+        credentials: {
+          dappSecretKey: 'DSK', dappPublicKey: 'DPK', walletPublicKey: 'WPK', session: 'OTHERS'
+        }
+      });
+
+      var dapp = nacl.box.keyPair();
+      return O.run('entry', {}, {
+        provider: R.forWallet('phantom'),
+        appUrl: 'https://a.test', redirectLink: 'https://a.test/cb', cluster: 'devnet', navigate: nav,
+        session: {
+          dappSecretKey: T.base58.encode(dapp.secretKey),
+          dappPublicKey: T.base58.encode(dapp.publicKey),
+          walletPublicKey: T.base58.encode(walletPair.publicKey),
+          session: 'MINE'
+        }
+      }).then(function() {
+        var intentKeys = Object.keys(J.peek().intent).sort();
+        return O.resume(walletRefuses('4900', 'Disconnected'), { redirectLink: 'https://a.test/cb', navigate: nav })
+          .then(function() { return { outcome: 'advanced' }; }, function(e) {
+            return {
+              outcome: 'refused', message: e.message, hops: urls.length, intentKeys: intentKeys,
+              othersSession: (WS.recall({ owner: 'other-user', wallet: 'phantom', cluster: 'devnet' }) || {}).credentials
+            };
+          });
+      });
+    JS
+
+    refute result["__error"], "flow errored: #{result['__error']}"
+    assert_equal %w[ctx op state], result["intentKeys"],
+                 "a caller-supplied session must write the journal it wrote before this feature existed"
+    assert_equal "refused", result["outcome"], "a session we did not store is not ours to recover"
+    assert_equal "Disconnected", result["message"]
+    assert_equal 1, result["hops"], "no recovery hop"
+    assert_equal "OTHERS", result["othersSession"]["session"],
+                 "and a stranger's stored session must not be evicted by it"
+  end
+
+  def test_the_recovered_connect_carries_the_cluster_the_trip_began_on
+    # A NULL CLUSTER IS DROPPED BY query(), so a recovery that lost it would send
+    # the wallet to its default — MAINNET-BETA — for a trip that began on devnet.
+    # Real funds, on a hop the user did not ask for. The cluster is read off the
+    # journalled scope, which is written beside every recovery block.
+    require_nacl!
+    result = run_js(<<~JS, nacl: true)
+      #{WALLET_APP}
+      O.define('entry', {
+        prepare: function() { return { transaction: 'TX' }; },
+        complete: function() { return 'done'; }
+      });
+      var urls = [];
+      var nav = function(u) { urls.push(u); };
+      WS.remember({
+        owner: 'u', wallet: 'phantom', cluster: 'devnet', publicKey: 'PK',
+        credentials: {
+          dappSecretKey: T.base58.encode(nacl.box.keyPair().secretKey),
+          dappPublicKey: 'DPK', walletPublicKey: T.base58.encode(walletPair.publicKey), session: 'SESS'
+        }
+      });
+      return O.run('entry', {}, {
+        provider: R.forWallet('phantom'), owner: 'u',
+        appUrl: 'https://a.test', redirectLink: 'https://a.test/cb', cluster: 'devnet', navigate: nav
+      }).then(function() {
+        return O.resume(walletRefuses('4900', 'Disconnected'), { navigate: nav });
+      }).then(function(out) {
+        var u = new URL(urls[1]);
+        return {
+          recovered: !!out.recovered,
+          cluster: u.searchParams.get('cluster'),
+          redirectLink: u.searchParams.get('redirect_link'),
+          appUrl: u.searchParams.get('app_url')
+        };
+      });
+    JS
+
+    refute result["__error"], "flow errored: #{result['__error']}"
+    assert_equal true, result["recovered"]
+    assert_equal "devnet", result["cluster"],
+                 "a recovered connect that loses the cluster sends the user to mainnet-beta"
+    # url.connect REFUSES to build without a redirect link since the second-hop
+    # guard landed; the journalled recovery block is what supplies it here, on a
+    # callback page that passed none.
+    assert_equal "https://a.test/cb", result["redirectLink"]
+    assert_equal "https://a.test", result["appUrl"]
+  end
+
+  def test_a_recovery_with_no_redirect_link_reports_the_wallets_error
+    # The second-hop guard REFUSES to build a connect URL without a redirect
+    # link. That throw would escape recovery and reach the user INSTEAD of the
+    # wallet's own error — a worse report, about a different subject. So recovery
+    # answers "cannot" and lets the wallet speak. Only reachable from a journal an
+    # older release wrote, which is exactly when a guard earns its keep.
+    require_nacl!
+    result = run_js(<<~JS, nacl: true)
+      #{WALLET_APP}
+      O.define('entry', {
+        prepare: function() { return { transaction: 'TX' }; },
+        complete: function() { return 'done'; }
+      });
+      var urls = [];
+      var nav = function(u) { urls.push(u); };
+      // A stored session, so the ORDER of forget() is observable: forgetting
+      // before the retry is known to be buildable drops it for nothing.
+      WS.remember({
+        owner: 'u', wallet: 'phantom', cluster: 'devnet', publicKey: 'PK',
+        credentials: { dappSecretKey: 'D', dappPublicKey: 'DP', walletPublicKey: 'W', session: 'KEEPME' }
+      });
+      // A journal as an older release left it: a recovery block with no link.
+      J.save({
+        v: R.JOURNAL_VERSION, wallet: 'phantom', step: 'signTransaction', startedAt: Date.now(),
+        dappSecretKey: T.base58.encode(nacl.box.keyPair().secretKey),
+        dappPublicKey: 'DPK', walletPublicKey: T.base58.encode(walletPair.publicKey), session: 'SESS',
+        intent: {
+          op: 'entry', ctx: {}, state: { transaction: 'TX' },
+          scope: { owner: 'u', cluster: 'devnet' },
+          recovery: { appUrl: 'https://a.test', redirectLink: null }
+        }
+      });
+      return O.resume(walletRefuses('4900', 'Disconnected'), { navigate: nav })
+        .then(function() { return { outcome: 'advanced' }; }, function(e) {
+          return {
+            outcome: 'refused', message: e.message, hops: urls.length,
+            session: (WS.recall({ owner: 'u', wallet: 'phantom', cluster: 'devnet' }) || {}).credentials
+          };
+        });
+    JS
+
+    refute result["__error"], "flow errored: #{result['__error']}"
+    assert_equal "refused", result["outcome"]
+    assert_equal "Disconnected", result["message"],
+                 "the user must read what the WALLET said, not a URL-builder complaint about a redirect link"
+    assert_equal 0, result["hops"], "and no half-built hop is taken"
+    assert_equal "KEEPME", result["session"]["session"],
+                 "a recovery that could not be built must not have spent the session on the attempt"
+  end
+
+  def test_a_recovery_block_with_no_scope_reports_the_wallets_error
+    # THE CLUSTER GUARD, exercised from the only place it is reachable: a journal
+    # written before recovery and scope were stamped together. Without it the
+    # recovered connect would carry `cluster: null`, query() would DROP it, and
+    # the wallet would default to mainnet-beta on a trip that began on devnet.
+    # Refusing to build is the correct answer — the wallet's own error is a truer
+    # report than a hop to the wrong network.
+    require_nacl!
+    result = run_js(<<~JS, nacl: true)
+      #{WALLET_APP}
+      O.define('entry', {
+        prepare: function() { return { transaction: 'TX' }; },
+        complete: function() { return 'done'; }
+      });
+      var urls = [];
+      var nav = function(u) { urls.push(u); };
+      J.save({
+        v: R.JOURNAL_VERSION, wallet: 'phantom', step: 'signTransaction', startedAt: Date.now(),
+        dappSecretKey: T.base58.encode(nacl.box.keyPair().secretKey),
+        dappPublicKey: 'DPK', walletPublicKey: T.base58.encode(walletPair.publicKey), session: 'SESS',
+        intent: {
+          op: 'entry', ctx: {}, state: { transaction: 'TX' },
+          recovery: { appUrl: 'https://a.test', redirectLink: 'https://a.test/cb' }
+        }
+      });
+      return O.resume(walletRefuses('4900', 'Disconnected'), { navigate: nav })
+        .then(function() { return { outcome: 'advanced', urls: urls }; }, function(e) {
+          return { outcome: 'refused', message: e.message, hops: urls.length };
+        });
+    JS
+
+    refute result["__error"], "flow errored: #{result['__error']}"
+    assert_equal "refused", result["outcome"],
+                 "a recovery with no cluster must not be built — it would land on mainnet-beta"
+    assert_equal "Disconnected", result["message"]
+    assert_equal 0, result["hops"]
+  end
+
   def test_a_payload_that_will_not_decrypt_is_not_treated_as_a_refused_session
     # THE OTHER HALF OF THE RECOVERY RULE. A decryption failure carries no
     # `code`: no vendor documents it as a refusal channel, and a corrupt payload

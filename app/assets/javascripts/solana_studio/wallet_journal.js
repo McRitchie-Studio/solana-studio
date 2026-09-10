@@ -19,10 +19,19 @@
 // the RECORD, not the file, and the records below share no key, no lifetime and
 // no reader.
 //
-// It also keeps `purge()` whole. Purge sweeps by PREFIX, so a session stored
-// under that prefix is cleared on logout by the call a host ALREADY makes. Split
-// the file and a host that upgrades without adding a second purge call ships a
-// session that outlives a logout — which is a stranger signing.
+// It also keeps `purge()` whole: ONE call clears both records, because both are
+// stored under this PREFIX. Split them and a host would have to learn a second
+// call, and the one it forgot would be the session.
+//
+// ⚠ BUT `purge()` IS NOT WIRED UP IN THIS ECOSYSTEM TODAY, and the difference
+// between "a call a host already makes" and "a call a host MUST add" is a
+// stranger signing. No consumer calls it: turf-monster's layout sweeps the
+// `phantom_dl_` prefix from the era before this gem existed, and THIS subsystem's
+// prefix is `wallet_dl_`, so that sweep clears NEITHER record. Exposure is zero
+// only because no consumer passes `owner` yet — the first one that does inherits
+// a session that never expires AND the dapp secret key beside it, both surviving
+// a logout on a shared device. Adopting `owner` means adding the purge call in
+// the same change. See the host-owes table in the README.
 //
 // THE NAME ON THE FILE IS NOW NARROWER THAN ITS CONTENTS, and that is a
 // deliberate cost, not an oversight. The path is shipped: consumers load
@@ -155,11 +164,16 @@
     removeRecord(KEY);
   }
 
-  // Purge every key this subsystem owns — BOTH records. A host calls this on
-  // user switch: a journal belongs to the person who started it, and one that
-  // outlived a logout would offer to resume a stranger's signature. The wallet
-  // session below is the same hazard with a longer fuse, and it is swept by the
-  // same call because it is stored under the same PREFIX.
+  // Purge every key this subsystem owns — BOTH records. A host MUST call this on
+  // logout and user switch: a journal belongs to the person who started it, and
+  // one that outlived a logout would offer to resume a stranger's signature. The
+  // wallet session is the same hazard with a much longer fuse — it never expires
+  // — and it is swept by this same call because it shares the PREFIX.
+  //
+  // MUST, not DOES. Nothing in this ecosystem calls it yet; turf-monster sweeps
+  // the older `phantom_dl_` prefix, which does not match `wallet_dl_` and so
+  // clears neither record. A consumer adopting `owner` owes this call in the same
+  // change.
   function purge() {
     var s = store();
     if (!s) return;
@@ -204,8 +218,9 @@
   // THE RECORD THAT MAKES A RETURNING USER ONE HOP. Every mobile signing trip
   // costs two app switches today — connect, then sign — and the second one is
   // paid over and over for a session that, per Phantom's, Solflare's and
-  // Backpack's own docs (verified 2026-09-07, recorded in redirect_provider.js's
-  // profile table), NEVER EXPIRES. Nothing wrote it down, so nothing could reuse
+  // Backpack's own docs (verified 2026-09-07; recorded per wallet as
+  // `sessionsExpire: false` alongside a `sessionDocs` URL in wallet_transport.js's
+  // PROFILES table), NEVER EXPIRES. Nothing wrote it down, so nothing could reuse
   // it. This is the writing down.
   //
   // THE OPPOSITE OF THE JOURNAL IN EVERY DIMENSION THAT MATTERS, which is why it

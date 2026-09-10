@@ -567,8 +567,9 @@ guard, come back empty, and be skipped in silence.
 #### `owner` — one hop for a returning user
 
 Sessions **never expire** on Phantom, Solflare or Backpack. All three vendors say
-so in their own docs (verified 2026-09-07; the profile table in
-`wallet_transport.js` records it per wallet). Nothing persisted one, so every
+so in their own docs — recorded per wallet as `sessionsExpire: false`, each with
+the `sessionDocs` URL it came from, in `wallet_transport.js`'s `PROFILES` table
+(verified 2026-09-07). Nothing persisted one, so every
 mobile signing trip paid **two app switches** — connect, then sign — and the
 second one is where a real user's entry was lost on QA.
 
@@ -585,7 +586,10 @@ SolanaStudio.walletOps.run('contest_entry', { contestId: 12 }, {
 ```
 
 Omit it and every trip behaves exactly as it did before — same hops, same journal
-bytes. The session lives in `SolanaStudio.walletSession`
+bytes, including a caller that supplies its own `opts.session`. Recovery and the
+scope stamp are written only for a session **this gem recalled**; a session you
+hand in stays yours to manage, because the gem has no record of it to forget.
+The session lives in `SolanaStudio.walletSession`
 (`solana_studio/wallet_journal.js`, a **separate record** from the journal: the
 journal is single-use and expires in ten minutes, a session is reusable and does
 not).
@@ -602,6 +606,13 @@ wrong in one of two directions.
 | `run(..., { owner, cluster })` | every trip | scopes the session; without it nothing is stored |
 | `resume(params, { owner, cluster })` | the callback page, for a **plain sign-in** connect | walletOps did not start that trip, so the owner can only come from here — and a sign-in session is what makes a user's *first* action one hop |
 | `walletJournal.purge()` | logout / user switch | sweeps both records. **A session outliving a logout is a stranger signing.** |
+
+> ⚠ **`purge()` is a call you must ADD, not one you already make.** It sweeps the
+> `wallet_dl_` prefix. A host carrying a `phantom_dl_`-era sweep from before this
+> gem existed — turf-monster's layout does — clears **neither** record, because
+> the prefixes do not match. Adopt `owner` and that call in the same change:
+> without it a session that *never expires*, and the dapp encryption secret
+> stored beside it, both survive a logout on a shared device.
 
 A trip started through `run` carries its own owner in the journal, so `resume`
 needs nothing for it. The stamp is read from the journal in preference to
