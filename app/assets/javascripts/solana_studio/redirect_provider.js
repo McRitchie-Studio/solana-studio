@@ -134,7 +134,10 @@
         url: t.url.method(walletKey, method, {
           dappPublicKey: journal.dappPublicKey,
           nonce: sealed.nonce,
-          redirectLink: opts.redirectLink,
+          // The caller's value wins when present, but a resume has no caller —
+          // it runs on a page the wallet sent us to. The journal is the fallback
+          // that makes the second hop possible at all.
+          redirectLink: opts.redirectLink || journal.redirectLink,
           payload: sealed.payload,
           useScheme: opts.useScheme
         }),
@@ -142,6 +145,7 @@
           dappSecretKey: journal.dappSecretKey,
           dappPublicKey: journal.dappPublicKey,
           walletPublicKey: journal.walletPublicKey,
+          redirectLink: opts.redirectLink || journal.redirectLink,
           session: journal.session,
           intent: opts.intent || journal.intent || null
         })
@@ -187,9 +191,15 @@
             cluster: opts.cluster,
             useScheme: opts.useScheme
           }),
+          // redirectLink IS TRIP STATE, not call state. The hop AFTER this one
+          // runs in a different document — often reached by the wallet, not by
+          // us — and it needs the same return address. Capturing only what the
+          // next LINE uses is what lost it; the journal exists precisely for
+          // what the whole trip needs.
           journal: newJournal(walletKey, 'connect', {
             dappSecretKey: t.base58.encode(pair.secretKey),
             dappPublicKey: dappPublicKey,
+            redirectLink: opts.redirectLink,
             intent: opts.intent || null
           })
         };
