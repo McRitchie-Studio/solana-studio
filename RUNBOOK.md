@@ -63,12 +63,72 @@ Troubleshooting guide for autonomous agents. Format: problem, diagnosis, fix.
 **Test command**
 ```bash
 cd /Users/alex/projects/solana-studio
-ruby -Itest test/keypair_test.rb test/borsh_test.rb test/transaction_test.rb
+bin/release-check          # the whole suite, one file at a time
+bin/release-check --list   # what it will run, in order
 ```
+`bin/release-check` is the one entry point local certs, CI, and the release
+sweep all share, so those three cannot drift apart. It enumerates by glob
+(`find test -name '*_test.rb'`), so a new test file is covered the moment it
+lands and there is no curated list to forget one from. It also fails a file
+that runs ZERO tests or SKIPS one — a suite that quietly stops covering
+something is the failure a green build cannot show you.
+
+Run one file directly while iterating: `bundle exec ruby -Itest test/keypair_test.rb`.
+
+The JS lanes shell out to node and FAIL rather than skip when a dependency is
+missing, deliberately — the gem's suite refuses a skip, because a lane that
+vanishes for want of a dependency looks identical to a lane that passed. There
+are TWO such dependencies and they fail with different messages and different
+fixes; read the message before reaching for a remedy.
+
+**JS tests fail with `node is required to run this suite`**
+- Diagnosis: node itself is absent from `PATH`. Every `test/*_js_test.rb` file
+  probes `node --version` once and asserts on it, so this one takes out ALL of
+  them at once — the assertion is a property of the lane, not a list of files
+  to keep current.
+- Fix: install node (CI pins 20 via `actions/setup-node` in
+  `.github/workflows/gem-ci.yml`), then re-run.
+
+**JS tests fail with `tweetnacl is required ...`**
+- Diagnosis: node is present but a FRESH checkout or worktree has no
+  `node_modules`. This hits only the lanes that exercise REAL crypto — they
+  load tweetnacl by absolute path out of `node_modules/tweetnacl` and assert
+  the directory exists first, so the failure names the dependency instead of
+  surfacing as a bare `TypeError` on `nacl.box` deep inside a codec. The lanes
+  that merely need the symbol to be present inject a stand-in object instead
+  and are unaffected. Grep `node_modules` across `test/*_js_test.rb` to see
+  which lanes are in which group today rather than trusting a list here. The
+  assertion is written per file rather than shared, so although both copies
+  read identically today, the wording after `tweetnacl is required` can drift.
+- Fix: `npm ci` in the gem root, then re-run. Do this before the first
+  `bin/release-check` on any new worktree; CI does the same (`npm ci` precedes
+  `bin/release-check` in `.github/workflows/gem-ci.yml`).
 
 **Test fails with missing `ed25519` gem**
 - Diagnosis: The only runtime dependency. `LoadError: cannot load such file -- ed25519`.
 - Fix: `cd /Users/alex/projects/solana-studio && bundle install`. The gemspec requires `ed25519 ~> 1.3`.
+
+**`test/docs/changelog_structure_test.rb` is red**
+- Diagnosis: `CHANGELOG.md`'s shape, not its prose. The assertion that usually
+  fires is the drift guard — `SolanaStudio::VERSION` more than two minor
+  versions ahead of the newest `## ` heading, which means releases went out
+  while their entries stayed under `## Unreleased`. The others catch a second
+  `## Unreleased`, a heading that is not `## vX.Y.Z (YYYY-MM-DD)`, versions out
+  of order or listed twice, and a `### ` above the first `## `.
+- Fix: move each stranded entry under the version that actually shipped it,
+  newest first. Attribute by git history, never by position in the file: `git
+  blame -w -M` on the line, `git log --reverse -S'<entry text>' -- CHANGELOG.md`,
+  and `git show <tag>:CHANGELOG.md` at each release tag agreeing is the
+  evidence. Leave anything you cannot place confidently under `## Unreleased`
+  and say so — a wrongly attributed changelog is worse than a long one. A
+  release that recorded nothing keeps a heading with no entries under it.
+- Note: this guard stands alone today. The hub's `bin/release prepare` does not
+  read `CHANGELOG.md` at all yet — the change that makes it roll the bucket at
+  every gem publish, and REFUSE while this drift exists, is pending in
+  mcritchie-studio PR #1344 (`release-prepare-skips-changelog`, still open).
+  Once that lands, a red run here is the same defect the release conductor
+  would stop on, caught earlier. Until it lands, nothing but this test is
+  watching.
 
 **Adding new tests**
 - Tests are plain minitest files in `test/`. No Rails, no fixtures. Each test file requires `test_helper.rb` which loads the gem. To add a test for `Solana::Client`, create `test/client_test.rb` following the existing pattern.
