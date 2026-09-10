@@ -114,6 +114,15 @@
       // different from its own provider methods.
       browsePath: '/ul/browse/',
       clusters: ['mainnet-beta', 'testnet', 'devnet'],
+      // SESSIONS DO NOT EXPIRE. Phantom's "Handling Sessions" page states it
+      // outright: a session token stays valid until the user disconnects, the
+      // wallet's keypair changes, the user switches networks, or the app_url is
+      // blocklisted — there is no TTL. This is the fact SolanaStudio.walletSession
+      // is built on, so it is recorded HERE, as data, next to every other
+      // per-wallet fact, rather than asserted in a comment somewhere downstream.
+      // Verified 2026-09-07.
+      sessionsExpire: false,
+      sessionDocs: 'https://docs.phantom.com/phantom-deeplinks/handling-sessions',
       // DEPRECATED BY PHANTOM: "The signAndSendTransaction deeplink is
       // deprecated. Use signAllTransactions or signTransaction instead." So on
       // Phantom the APP still broadcasts — sendRawTransaction + a confirmation
@@ -136,6 +145,10 @@
       connectKeys: ['solflare_encryption_public_key'],
       browsePath: '/ul/v1/browse/',
       clusters: ['mainnet-beta', 'testnet', 'devnet'],
+      // Same as Phantom, which is expected — Solflare forked the spec and its
+      // docs link Phantom's own blocklist repo. Verified 2026-09-07.
+      sessionsExpire: false,
+      sessionDocs: 'https://docs.solflare.com/solflare/technical/deeplinks/provider-methods/connect',
       send: 'wallet-broadcasts',
       methods: {
         connect: true, disconnect: true, signMessage: true,
@@ -164,6 +177,13 @@
       // devnet cannot currently QA this wallet, which is a lane decision, not a
       // bug to paper over here. supportsCluster() reports it honestly.
       clusters: ['mainnet-beta'],
+      // Same as the other two. Backpack's session handling is the forked
+      // Phantom spec, and nothing in its corpus documents a TTL.
+      // Verified 2026-09-07 — and see the connectKeys note above: this vendor's
+      // docs are the least settled of the three, so this is the entry to
+      // re-confirm first if a session ever comes back refused for no reason.
+      sessionsExpire: false,
+      sessionDocs: 'https://docs.backpack.app/backpack-deeplinks/provider-methods/connect',
       send: 'wallet-broadcasts',
       methods: {
         connect: true, disconnect: true, signMessage: true,

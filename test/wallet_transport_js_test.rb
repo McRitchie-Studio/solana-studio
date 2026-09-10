@@ -152,6 +152,34 @@ class WalletTransportJsTest < Minitest::Test
     assert_equal [false, false, false], result
   end
 
+  def test_every_wallet_records_that_its_sessions_do_not_expire
+    # THE FACT SolanaStudio.walletSession IS BUILT ON, recorded as DATA rather
+    # than asserted in a comment somewhere downstream. Three files used to cite
+    # "the profile table" for a never-expire claim the table did not contain, and
+    # one of them named the wrong file — a citation nobody could check is a
+    # citation that rots. Each entry carries the doc URL it came from, so the
+    # next reader can re-verify it in one click.
+    #
+    # If a vendor ever introduces a TTL, this test should fail and the whole
+    # feature revisited: a session store with no expiry is only correct while
+    # this is true.
+    result = run_js(<<~JS)
+      return ['phantom', 'solflare', 'backpack'].map(function (w) {
+        var p = T.PROFILES[w];
+        return { expires: p.sessionsExpire, docs: p.sessionDocs };
+      });
+    JS
+
+    result.each_with_index do |entry, i|
+      wallet = %w[phantom solflare backpack][i]
+      assert_equal false, entry["expires"],
+                   "#{wallet} must declare sessionsExpire: false — walletSession stores a session " \
+                   "with no TTL, and this table is where that is justified"
+      assert_match %r{\Ahttps://\S+\z}, entry["docs"].to_s,
+                   "#{wallet} must carry the vendor doc URL the claim was verified against"
+    end
+  end
+
   def test_connect_public_key_resolves_per_wallet_with_backpack_fallback
     # The ONLY response key that differs between wallets. Backpack's own docs
     # disagree with themselves (wallet_encryption_public_key vs the wallet_xxx
