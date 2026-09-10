@@ -13,9 +13,9 @@ require_relative "../test_helper"
 # `## v0.5.0` while thirteen releases went out, because `bin/release prepare`
 # bumped `lib/solana_studio/version.rb` and its lockfile but never rolled the
 # `## Unreleased` bucket into a version heading — and nothing failed when it
-# didn't. Forty-four shipped entries accumulated under a heading that said they
-# had not shipped. This guard is the thing that would have gone red at the second
-# release instead of the fourteenth.
+# didn't. The bucket reached forty-four entries, twenty-nine of them already
+# shipped under a heading that said they had not. This guard is the thing that
+# would have gone red at the second release instead of the fourteenth.
 #
 # THE FLOOR IS A PROPERTY, NOT A COUNT, and that is deliberate. A structure test
 # whose regex has stopped matching passes having proved nothing, so the obvious
