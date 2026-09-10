@@ -97,9 +97,9 @@ fixes; read the message before reaching for a remedy.
   surfacing as a bare `TypeError` on `nacl.box` deep inside a codec. The lanes
   that merely need the symbol to be present inject a stand-in object instead
   and are unaffected. Grep `node_modules` across `test/*_js_test.rb` to see
-  which lanes are in which group today rather than trusting a list here; the
-  exact wording after `tweetnacl is required` also varies by lane, because the
-  assertion is written per file rather than shared.
+  which lanes are in which group today rather than trusting a list here. The
+  assertion is written per file rather than shared, so although both copies
+  read identically today, the wording after `tweetnacl is required` can drift.
 - Fix: `npm ci` in the gem root, then re-run. Do this before the first
   `bin/release-check` on any new worktree; CI does the same (`npm ci` precedes
   `bin/release-check` in `.github/workflows/gem-ci.yml`).
