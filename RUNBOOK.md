@@ -89,14 +89,17 @@ fixes; read the message before reaching for a remedy.
 - Fix: install node (CI pins 20 via `actions/setup-node` in
   `.github/workflows/gem-ci.yml`), then re-run.
 
-**JS tests fail with `tweetnacl is required for the crypto round trips`**
+**JS tests fail with `tweetnacl is required ...`**
 - Diagnosis: node is present but a FRESH checkout or worktree has no
-  `node_modules` — the lanes load the REAL tweetnacl by absolute path from
-  `node_modules/tweetnacl`. Only the two lanes that do crypto round trips call
-  `require_nacl!` and can emit this: `test/wallet_ops_js_test.rb` and
-  `test/redirect_provider_js_test.rb`. The other `*_js_test.rb` files stub
-  their own crypto and never touch `node_modules`, so seeing them red means you
-  are looking at the node case above, not this one.
+  `node_modules`. This hits only the lanes that exercise REAL crypto — they
+  load tweetnacl by absolute path out of `node_modules/tweetnacl` and assert
+  the directory exists first, so the failure names the dependency instead of
+  surfacing as a bare `TypeError` on `nacl.box` deep inside a codec. The lanes
+  that merely need the symbol to be present inject a stand-in object instead
+  and are unaffected. Grep `node_modules` across `test/*_js_test.rb` to see
+  which lanes are in which group today rather than trusting a list here; the
+  exact wording after `tweetnacl is required` also varies by lane, because the
+  assertion is written per file rather than shared.
 - Fix: `npm ci` in the gem root, then re-run. Do this before the first
   `bin/release-check` on any new worktree; CI does the same (`npm ci` precedes
   `bin/release-check` in `.github/workflows/gem-ci.yml`).
