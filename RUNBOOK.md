@@ -75,13 +75,28 @@ something is the failure a green build cannot show you.
 
 Run one file directly while iterating: `bundle exec ruby -Itest test/keypair_test.rb`.
 
-**Ten JS tests fail with `tweetnacl is required for the crypto round trips`**
-- Diagnosis: a FRESH checkout or worktree has no `node_modules`. The JS lanes
-  (`test/wallet_ops_js_test.rb`, `test/network_guard_js_test.rb`,
-  `test/redirect_provider_js_test.rb`, `test/wallet_transport_js_test.rb`)
-  shell out to node and FAIL rather than skip, deliberately — the gem's suite
-  refuses a skip, because a lane that vanishes without node looks identical to
-  a lane that passed.
+The JS lanes shell out to node and FAIL rather than skip when a dependency is
+missing, deliberately — the gem's suite refuses a skip, because a lane that
+vanishes for want of a dependency looks identical to a lane that passed. There
+are TWO such dependencies and they fail with different messages and different
+fixes; read the message before reaching for a remedy.
+
+**JS tests fail with `node is required to run this suite`**
+- Diagnosis: node itself is absent from `PATH`. Every `test/*_js_test.rb` file
+  probes `node --version` once and asserts on it, so this one takes out ALL of
+  them at once — the assertion is a property of the lane, not a list of files
+  to keep current.
+- Fix: install node (CI pins 20 via `actions/setup-node` in
+  `.github/workflows/gem-ci.yml`), then re-run.
+
+**JS tests fail with `tweetnacl is required for the crypto round trips`**
+- Diagnosis: node is present but a FRESH checkout or worktree has no
+  `node_modules` — the lanes load the REAL tweetnacl by absolute path from
+  `node_modules/tweetnacl`. Only the two lanes that do crypto round trips call
+  `require_nacl!` and can emit this: `test/wallet_ops_js_test.rb` and
+  `test/redirect_provider_js_test.rb`. The other `*_js_test.rb` files stub
+  their own crypto and never touch `node_modules`, so seeing them red means you
+  are looking at the node case above, not this one.
 - Fix: `npm ci` in the gem root, then re-run. Do this before the first
   `bin/release-check` on any new worktree; CI does the same (`npm ci` precedes
   `bin/release-check` in `.github/workflows/gem-ci.yml`).
@@ -104,9 +119,13 @@ Run one file directly while iterating: `bundle exec ruby -Itest test/keypair_tes
   evidence. Leave anything you cannot place confidently under `## Unreleased`
   and say so — a wrongly attributed changelog is worse than a long one. A
   release that recorded nothing keeps a heading with no entries under it.
-- Note: the hub's `bin/release prepare` rolls the bucket at every gem publish
-  and REFUSES to publish while this drift exists, so a red run here is the same
-  defect the release conductor would stop on, caught earlier.
+- Note: this guard stands alone today. The hub's `bin/release prepare` does not
+  read `CHANGELOG.md` at all yet — the change that makes it roll the bucket at
+  every gem publish, and REFUSE while this drift exists, is pending in
+  mcritchie-studio PR #1344 (`release-prepare-skips-changelog`, still open).
+  Once that lands, a red run here is the same defect the release conductor
+  would stop on, caught earlier. Until it lands, nothing but this test is
+  watching.
 
 **Adding new tests**
 - Tests are plain minitest files in `test/`. No Rails, no fixtures. Each test file requires `test_helper.rb` which loads the gem. To add a test for `Solana::Client`, create `test/client_test.rb` following the existing pattern.

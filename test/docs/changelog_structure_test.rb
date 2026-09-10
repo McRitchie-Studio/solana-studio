@@ -20,9 +20,8 @@ require_relative "../test_helper"
 # THE FLOOR IS A PROPERTY, NOT A COUNT, and that is deliberate. A structure test
 # whose regex has stopped matching passes having proved nothing, so the obvious
 # guard is a minimum heading count — but a hard-coded floor copied between repos
-# is the same vacuous pass wearing a number (studio-engine's own guard carries
-# MIN_VERSION_HEADINGS = 110 against a real 115; in a repo with twenty headings
-# that constant can never fire). The floor here is derived from the file itself
+# is the same vacuous pass wearing a number: set it near the current count and it
+# never fires again as the file grows past it. The floor here is derived from the file itself
 # on every run: EVERY `## ` heading below the bucket must parse as a version. If
 # the regex ever stops matching this repo's dialect, every heading becomes
 # unparseable at once and this fails loudly — there is no number to copy wrong
@@ -34,21 +33,26 @@ class ChangelogStructureTest < Minitest::Test
   UNRELEASED = "## Unreleased"
 
   # THIS repo's one heading dialect: a `v`-prefixed version and a parenthesised
-  # ISO date. Deliberately stricter than the runtime guard's cross-repo regex
-  # (`Release::Changelog::VERSION_HEADING`, which also reads studio-engine's
-  # `## 0.39.0 — 2026-08-11` and turf-vault's `## [0.25.0] - 2026-06-10`),
-  # because a second dialect landing in THIS file is the defect: the roller
-  # copies the dialect it finds, so one foreign heading propagates to every
-  # heading written after it.
+  # ISO date. Deliberately stricter than the cross-repo regex the pending hub
+  # guard will carry (`Release::Changelog::VERSION_HEADING` in mcritchie-studio
+  # PR #1344, unmerged — it accepts an optional `v` and optional brackets so it
+  # also reads studio-engine's `## 0.39.0 — 2026-08-11` and turf-vault's
+  # `## [0.25.0] - 2026-06-10`), because a second dialect landing in THIS file is
+  # the defect: the roller copies the dialect it finds, so one foreign heading
+  # propagates to every heading written after it.
   VERSION_HEADING = /\A\#\# v(\d+\.\d+\.\d+) \(\d{4}-\d{2}-\d{2}\)\z/
 
   # How far `SolanaStudio::VERSION` may run ahead of the newest version heading
   # before the file counts as carrying a backlog rather than a gap. NOT ZERO: a
   # release that ships no entry at all is legitimate (v0.8.0, v0.9.0 and v0.9.1
   # were three such, and each carries an entry-less heading recording exactly
-  # that). Two is the tolerance `Release::Changelog::MAX_MINOR_DRIFT` carries in
-  # the hub's release conductor, matched on purpose so the runtime guard and this
-  # repo guard can never disagree about what counts as drift.
+  # that). Two is chosen to match the value the PENDING hub guard will carry —
+  # `Release::Changelog::MAX_MINOR_DRIFT = 2`, in mcritchie-studio PR #1344
+  # (`release-prepare-skips-changelog`), which is not merged, so no such constant
+  # exists on the hub today. This is a HAND-COPIED number: nothing tests that the
+  # two agree, and if the hub's value changes this one will not follow. Re-check
+  # it by hand when that PR lands, and treat any disagreement as this file being
+  # stale rather than the conductor being wrong.
   MAX_MINOR_DRIFT = 2
 
   def setup
