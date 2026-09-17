@@ -1,5 +1,6 @@
 require "base64"
 require "ed25519"
+require_relative "ed25519_strict"
 
 module Solana
   # A decoded LEGACY wire transaction: the signature array plus the message it
@@ -180,13 +181,13 @@ module Solana
 
     # True when slot `index` holds a valid ed25519 signature, by the key in that
     # signer slot, over these exact message bytes. An empty slot is not valid.
+    # Strict (Solana::Ed25519Strict): a slot the cluster's own signature check
+    # would refuse — a small-order key or R, an unreduced S — is not valid here
+    # either, so a completer refuses it before the fee payer signs.
     def signature_valid?(index)
       return false if index >= @num_required_signatures || signature_slot_empty?(index)
 
-      Ed25519::VerifyKey.new(@account_keys[index]).verify(@signatures[index], @message_bytes)
-      true
-    rescue Ed25519::VerifyError, ArgumentError
-      false
+      Ed25519Strict.verify(@account_keys[index], @signatures[index], @message_bytes)
     end
 
     # The transaction's identity on chain: its FIRST signature (the fee payer's),

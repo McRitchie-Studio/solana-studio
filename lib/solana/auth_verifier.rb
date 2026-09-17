@@ -1,4 +1,5 @@
 require "ed25519"
+require_relative "ed25519_strict"
 require "openssl"
 
 module Solana
@@ -68,6 +69,17 @@ module Solana
       end
       unless sig_bytes.bytesize == ED25519_SIGNATURE_BYTES
         raise VerificationError, "Signature must be #{ED25519_SIGNATURE_BYTES} bytes, got #{sig_bytes.bytesize}"
+      end
+
+      # Ed25519::VerifyKey checks the equation and nothing else, so a
+      # small-order or non-canonical key — an address with no secret key behind
+      # it — can pass it. Refuse those, and a malformed R or S, before it runs.
+      # See Solana::Ed25519Strict.
+      if (problem = Solana::Ed25519Strict.public_key_problem(pub_bytes))
+        raise VerificationError, "Public key #{problem}"
+      end
+      if (problem = Solana::Ed25519Strict.signature_problem(sig_bytes))
+        raise VerificationError, "Signature #{problem}"
       end
 
       verify_key = Ed25519::VerifyKey.new(pub_bytes)
