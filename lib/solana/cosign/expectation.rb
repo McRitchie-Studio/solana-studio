@@ -85,9 +85,10 @@ module Solana
       #
       # A wire from the client is not a source of expectations — it is the thing
       # being judged. Passing one here judges the wire against itself.
-      def self.from_wire(built_wire_base64, fee_payer:, last_valid_block_height: nil, commitment: DEFAULT_COMMITMENT,
-                         pin_blockhash: false, fee_margin: DEFAULT_FEE_MARGIN, extra_programs: DEFAULT_EXTRA_PROGRAMS)
-        message = WireMessage.parse_base64(built_wire_base64)
+      def self.from_wire(built_wire, fee_payer:, last_valid_block_height: nil, commitment: DEFAULT_COMMITMENT,
+                         pin_blockhash: false, fee_margin: DEFAULT_FEE_MARGIN, extra_programs: DEFAULT_EXTRA_PROGRAMS,
+                         encoding: :base64)
+        message = WireMessage.parse_encoded(built_wire, encoding)
         payer = Cosign.key_bytes(fee_payer)
         unless message.fee_payer == payer
           raise ArgumentError, "the built wire's fee payer is #{Cosign.base58(message.fee_payer)}, not #{Cosign.base58(payer)}"

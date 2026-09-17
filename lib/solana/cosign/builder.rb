@@ -2,7 +2,7 @@ module Solana
   module Cosign
     # A built transaction, ready for its cosigners, with the deadline attached.
     #
-    #   wire_base64              the wire to hand the wallet(s)
+    #   wire_base64              the wire to hand the wallet(s); #wire_base58 too
     #   blockhash                the recent blockhash it is anchored on (base58)
     #   last_valid_block_height  once the cluster's block height passes this, the
     #                            transaction can never land — rebuild BEFORE
@@ -15,7 +15,13 @@ module Solana
     # Store wire_base64 and last_valid_block_height server-side if the signature
     # comes back in a later request; Expectation.from_wire rebuilds the rest.
     Prepared = Struct.new(:wire_base64, :blockhash, :last_valid_block_height, :commitment,
-                          :fee_payer, :signers, :expectation, keyword_init: true)
+                          :fee_payer, :signers, :expectation, keyword_init: true) do
+      # The same wire in base58, the format SolanaStudio.walletOps `prepare`
+      # returns to the browser — no conversion in host JavaScript.
+      def wire_base58
+        Keypair.encode_base58(Base64.strict_decode64(wire_base64))
+      end
+    end
 
     # Builds a transaction the SERVER pays for.
     #

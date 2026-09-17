@@ -14,7 +14,11 @@ module Solana
     # the wire runs before the fee payer's key is used, so a refused wire leaves
     # nothing behind that could be broadcast.
     class Completer
-      Cosigned = Struct.new(:wire_base64, :signature, :message, keyword_init: true)
+      Cosigned = Struct.new(:wire_base64, :signature, :message, keyword_init: true) do
+        def wire_base58
+          message.to_base58
+        end
+      end
       Completed = Struct.new(:signature, :wire_base64, :confirmation_status, keyword_init: true)
 
       COMMITMENT_RANK = { "processed" => 0, "confirmed" => 1, "finalized" => 2 }.freeze
@@ -38,8 +42,10 @@ module Solana
         @clock = clock
       end
 
+      # signed_wire: the wallet-returned wire, base64 by default; pass
+      # `encoding: :base58` for what SolanaStudio.walletOps hands `complete`.
       # Returns the decoded WireMessage, or raises WireRejected.
-      def verify!(signed_wire_base64, expectation:)
+      def verify!(signed_wire, expectation:, encoding: :base64)
         unless expectation.fee_payer == @fee_payer_bytes
           # A wiring mistake in the caller, not something the wire did.
           raise ArgumentError, "the expectation's fee payer #{Cosign.base58(expectation.fee_payer)} " \
@@ -48,7 +54,7 @@ module Solana
 
         message =
           begin
-            WireMessage.parse_base64(signed_wire_base64)
+            WireMessage.parse_encoded(signed_wire, encoding)
           rescue WireMessage::MalformedError => e
             raise WireRejected.new(:unparseable_wire, e.message)
           end
@@ -58,8 +64,8 @@ module Solana
 
       # Returns Cosigned(wire_base64, signature, message). The signature is the
       # transaction's id, known BEFORE anything is sent: record it first.
-      def cosign(signed_wire_base64, expectation:)
-        message = verify!(signed_wire_base64, expectation: expectation)
+      def cosign(signed_wire, expectation:, encoding: :base64)
+        message = verify!(signed_wire, expectation: expectation, encoding: encoding)
 
         # Every cosigner slot must already hold a valid signature over THESE
         # bytes. An empty or forged slot is refused here, before the fee payer
@@ -95,8 +101,8 @@ module Solana
       #   judges the blockhash, the simulation judges the program).
       # confirm_timeout: seconds to wait for the expectation's commitment; nil
       #   returns right after the send with confirmation_status nil.
-      def complete(signed_wire_base64, expectation:, simulate: true, before_send: nil, confirm_timeout: 30)
-        cosigned = cosign(signed_wire_base64, expectation: expectation)
+      def complete(signed_wire, expectation:, encoding: :base64, simulate: true, before_send: nil, confirm_timeout: 30)
+        cosigned = cosign(signed_wire, expectation: expectation, encoding: encoding)
         signature = cosigned.signature
         wire_base64 = cosigned.wire_base64
         commitment = expectation.commitment

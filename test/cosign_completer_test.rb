@@ -66,6 +66,28 @@ class CosignCompleterTest < Minitest::Test
     assert_equal "fee_payer_signature_invalid", error.reason
   end
 
+  # SolanaStudio.walletOps speaks base58 on both transports; a host should not
+  # need JavaScript conversions to meet this API.
+  def test_base58_in_from_the_wallet_seam_and_out_again
+    prepared = prepare
+    assert_equal Base64.strict_decode64(prepared.wire_base64), Solana::Keypair.decode_base58(prepared.wire_base58)
+
+    signed58 = Solana::Keypair.encode_base58(signed_by(Solana::Keypair.decode_base58(prepared.wire_base58), user))
+    cosigned = completer.cosign(signed58, expectation: prepared.expectation, encoding: :base58)
+    assert Solana::WireMessage.parse_base58(cosigned.wire_base58).signature_valid?(0)
+    assert_equal Base64.strict_decode64(cosigned.wire_base64), Solana::Keypair.decode_base58(cosigned.wire_base58)
+
+    result = completer.complete(signed58, expectation: prepared.expectation, encoding: :base58)
+    assert_equal cosigned.signature, result.signature
+  end
+
+  def test_the_encoding_is_declared_never_guessed
+    signed58 = Solana::Keypair.encode_base58(Base64.strict_decode64(@signed))
+    error = assert_raises(Solana::Cosign::WireRejected) { completer.cosign(signed58, expectation: @prepared.expectation) }
+    assert_equal "unparseable_wire", error.reason
+    assert_raises(ArgumentError) { completer.cosign(@signed, expectation: @prepared.expectation, encoding: :hex) }
+  end
+
   def test_completer_needs_a_keypair_and_the_matching_expectation
     assert_raises(ArgumentError) { Solana::Cosign::Completer.new(client: rpc, fee_payer: house.address) }
 

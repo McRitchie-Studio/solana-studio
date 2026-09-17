@@ -36,6 +36,28 @@ module Solana
       raise MalformedError, "wire is not strict base64: #{e.message}"
     end
 
+    # Base58 is the wire format of the gem's own browser seam (walletOps hands
+    # `prepare` and `complete` base58), so a host can pass it straight through.
+    def self.parse_base58(wire_base58)
+      raise MalformedError, "wire is empty" if wire_base58.nil? || wire_base58.to_s.empty?
+
+      parse(Keypair.decode_base58(wire_base58.to_s))
+    rescue ArgumentError => e
+      raise e if e.is_a?(MalformedError)
+
+      raise MalformedError, "wire is not base58: #{e.message}"
+    end
+
+    # encoding: :base64 or :base58. Explicit, never sniffed: every base58
+    # string is also made of base64 characters, so guessing can misread one.
+    def self.parse_encoded(wire, encoding)
+      case encoding
+      when :base64 then parse_base64(wire)
+      when :base58 then parse_base58(wire)
+      else raise ArgumentError, "encoding must be :base64 or :base58, got #{encoding.inspect}"
+      end
+    end
+
     # `wire` is the binary wire transaction: compact-u16 signature count, the
     # 64-byte signatures, then the message.
     def self.parse(wire)
@@ -119,6 +141,10 @@ module Solana
 
     def to_base64
       Base64.strict_encode64(@wire)
+    end
+
+    def to_base58
+      Keypair.encode_base58(@wire)
     end
 
     # The fee payer: account 0, always the first signer.

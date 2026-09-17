@@ -204,6 +204,12 @@ class CosignExpectationTest < Minitest::Test
                  rebuilt.instructions.first[:data]
   end
 
+  def test_from_wire_reads_a_stored_base58_wire
+    rebuilt = Solana::Cosign::Expectation.from_wire(@prepared.wire_base58, fee_payer: house, encoding: :base58)
+    assert_equal expectation.instructions, rebuilt.instructions
+    assert_equal expectation.cosigners, rebuilt.cosigners
+  end
+
   def test_from_wire_can_pin_the_blockhash
     rebuilt = Solana::Cosign::Expectation.from_wire(@prepared.wire_base64, fee_payer: house, pin_blockhash: true)
     assert_equal Solana::Keypair.decode_base58(BLOCKHASH), rebuilt.blockhash

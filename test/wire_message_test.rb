@@ -70,6 +70,17 @@ class WireMessageTest < Minitest::Test
     refute Solana::WireMessage.parse(tampered).signature_valid?(user_slot)
   end
 
+  def test_base58_round_trips_and_refuses_non_base58
+    wire = built_wire
+    msg = Solana::WireMessage.parse_base58(Solana::Keypair.encode_base58(wire))
+    assert_equal wire, msg.to_bytes
+    assert_equal wire, Solana::Keypair.decode_base58(msg.to_base58)
+    assert_equal wire, Solana::WireMessage.parse_encoded(Base64.strict_encode64(wire), :base64).to_bytes
+    assert_raises(Solana::WireMessage::MalformedError) { Solana::WireMessage.parse_base58("0OIl") }
+    assert_raises(Solana::WireMessage::MalformedError) { Solana::WireMessage.parse_base58("") }
+    assert_raises(ArgumentError) { Solana::WireMessage.parse_encoded("abc", :hex) }
+  end
+
   def test_parse_base64_refuses_non_base64
     assert_raises(Solana::WireMessage::MalformedError) { Solana::WireMessage.parse_base64("not base64!!") }
     assert_raises(Solana::WireMessage::MalformedError) { Solana::WireMessage.parse_base64("") }

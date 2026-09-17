@@ -131,6 +131,7 @@ prepared = builder.build(
   compute_unit_limit: 200_000
 )
 prepared.wire_base64              # hand this to the wallet
+prepared.wire_base58              # or this: what a walletOps `prepare` returns
 prepared.last_valid_block_height  # the deadline: past this height it can never land
 ```
 
@@ -146,6 +147,10 @@ result = completer.complete(signed_wire_from_wallet, expectation: expectation,
                             before_send: ->(signature) { record.update!(signature: signature) })
 result.signature
 ```
+
+A wire from `SolanaStudio.walletOps` arrives in base58: pass `encoding: :base58`
+to `#verify!`, `#cosign`, `#complete` or `Expectation.from_wire`. The encoding is
+declared, never guessed — every base58 string is also made of base64 characters.
 
 `#complete` runs, in order: judge the wire, check every cosigner signature, fill
 the fee payer's slot (`Transaction.cosign_wire`), check the block height against
