@@ -58,6 +58,7 @@ class GemspecTest < Minitest::Test
     assert_includes spec.files, "app/assets/javascripts/solana_studio/redirect_provider.js"
     assert_includes spec.files, "app/assets/javascripts/solana_studio/wallet_journal.js"
     assert_includes spec.files, "app/assets/javascripts/solana_studio/wallet_ops.js"
+    assert_includes spec.files, "app/assets/javascripts/solana_studio/wallet_identity.js"
   end
 
   def test_manifest_carries_no_directory_entries

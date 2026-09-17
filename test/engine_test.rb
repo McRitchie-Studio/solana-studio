@@ -137,4 +137,31 @@ class EngineTest < Minitest::Test
     assert ok, "initializer lookup failed: #{err}"
     assert_equal "true", out
   end
+
+  # A sprockets host (turf-monster, mcritchie-studio) 404s a gem script that the
+  # precompile list does not name, in production only, with no local warning.
+  # test/gemspec_test.rb proves a script is PACKAGED; this proves it is SERVED.
+  # The expected set is read from disk, so a new script is covered the moment it
+  # lands, and the initializer is RUN rather than its source grepped.
+  def test_every_shipped_script_is_named_for_precompile
+    out, ok, err = ruby(<<~CODE)
+      require "rails"
+      require "solana_studio"
+      assets = ActiveSupport::OrderedOptions.new
+      assets.precompile = []
+      config = ActiveSupport::OrderedOptions.new
+      config.assets = assets
+      app = Struct.new(:config).new(config)
+      SolanaStudio::Engine.initializers.find { |i| i.name.to_s == "solana_studio.assets" }.run(app)
+      puts assets.precompile.sort
+    CODE
+
+    assert ok, "running the asset initializer failed: #{err}"
+    on_disk = Dir[File.expand_path("../app/assets/javascripts/solana_studio/*.js", LIB)]
+              .map { |path| "solana_studio/#{File.basename(path)}" }.sort
+    refute_empty on_disk, "the glob found no scripts, so this test would prove nothing"
+    assert_equal on_disk, out.lines.map(&:strip).reject(&:empty?),
+                 "every script under app/assets/javascripts/solana_studio must be in the " \
+                 "solana_studio.assets precompile list, and nothing else"
+  end
 end

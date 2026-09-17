@@ -769,6 +769,110 @@ the RPC. The redirect leg also needs a host callback page to call
 `walletOps.resume(params, { navigate })`; studio-engine's
 `solana_sessions/phantom_callback` does this from 0.73.0.
 
+### The wallet as a session identity (`walletIdentity`)
+
+`solana_studio/wallet_identity.js` makes the connected wallet an **identity
+source** for studio-engine's session-drift primitive (`window.StudioSession`,
+documented in studio-engine's `docs/SESSION_DRIFT.md`). The engine compares the
+identities a page was rendered for with the identities the browser observes now,
+and it stays web2: it never learns what a wallet is. This file supplies that
+half, and nothing else in the gem depends on it.
+
+Load it after `studio/session.js`, then register once per window. Registering
+the same name twice throws, and on a Turbo host the session store and its
+registrations outlive a visit, so a script that runs on every visit must register
+only the first time:
+
+```erb
+<%= javascript_include_tag "studio/session" %>
+<%= javascript_include_tag "solana_studio/wallet_identity" %>
+```
+
+```js
+var wallet = SolanaStudio.walletIdentity.register({
+  getProvider: hostResolver,                    // your registry's pick, or omit for window.phantom.solana
+  trustedConnect: sessionHasAWallet,            // see the options table
+  rescanOn: ["wallet-provider:registered"]      // your registry's "a wallet arrived" event, if it has one
+});
+
+wallet.source.current();                        // { status, address, providerName }
+wallet.source.subscribe(function (next, previous) { /* repaint the navbar */ });
+document.addEventListener("session:mismatch", function (event) {
+  if (event.detail.source === "wallet") { /* an undeclared switch */ }
+});
+```
+
+`register` returns `{ source, registration }`. Without a `StudioSession` on the
+page, `registration` is null and the source still runs, so a page can render
+wallet state without the session primitive.
+`SolanaStudio.walletIdentity.create(options)` returns the bare source for a host
+that registers it itself.
+
+#### What it reports
+
+| `status` | Reported to the session | Meaning |
+|----------|-------------------------|---------|
+| `unknown` | `undefined` (cannot tell) | Provider discovery or a silent connect is still pending |
+| `none` | `null` | No wallet provider appeared before the discovery window closed |
+| `disconnected` | `null` | A provider is present and holds no account for this site |
+| `connected` | the base58 address | This wallet is connected |
+
+`unknown` and `none` never collapse: a page that cannot tell yet must not render
+as "you have no wallet". The session sees only the middle column.
+
+**A mismatch is a different connected address, and nothing else.** A disconnect,
+a locked extension, or a page with no wallet is not a switch to someone else, so
+the source's `equals` treats an observed `null` as agreeing with the bound
+address. The page still sees the disconnect through `current()`. Pass
+`disconnectIsMismatch: true` to count it.
+
+#### How it reads the wallet
+
+- **Two provider shapes.** An injected provider (Phantom's
+  `window.phantom.solana`, or a host adapter normalized to it): live
+  `publicKey`, plus `accountChanged`, `connect` and `disconnect`. A raw Wallet
+  Standard wallet: live `accounts` and `standard:events` `change`.
+- **Live, never cached.** Every read goes back to the wallet. On a Wallet
+  Standard `change` it reads `wallet.accounts`, not the event's copy, because
+  an adapter that cached its account once reported the previous account forever
+  after a switch the wallet never announced.
+- **Events are best-effort.** `focus`, `visibilitychange` to visible and
+  `pageshow` re-resolve the provider and re-read it. That catches a switch made
+  while the tab was hidden.
+- **One binding per provider object**, however often the page reconciles. A
+  provider replaced by a later one (a Wallet Standard registration superseding
+  the injected object) is detached, and its events are ignored.
+
+#### Options
+
+| Option | Default | |
+|--------|---------|---|
+| `getProvider` | `window.phantom.solana \|\| window.solana` | The provider to watch now, or null. Called on every reconcile. |
+| `trustedConnect` | `false` | When the wallet holds no account, ask it silently (`onlyIfTrusted` / `{ silent: true }`) before believing `disconnected`. **Off by default** because a silent connect can pop Phantom's unlock prompt; turn it on only where a wallet session is already expected. |
+| `discoveryMs`, `discoveryIntervalMs` | `3000`, `100` | How long "no provider yet" stays `unknown` while a late injection is polled for. `0` reads `none` at once. |
+| `rescanOn` | `[]` | Extra `window` events that re-resolve the provider. |
+| `name` | `"wallet"` | The identity source name, and the key the server binds under. |
+| `bound` | engine default | Passed through to the engine: `bound(snapshot)` returns the bound identity. |
+| `disconnectIsMismatch` | `false` | See above. |
+| `session` | `window.StudioSession` | The store `register` uses. |
+
+#### What the host owes
+
+- **The server half.** Bind the session under the same name:
+  `studio_session_identities` returns `{ wallet: <the wallet this session signed
+  in with> }`. Bind nothing for a session that has no wallet of its own (a guest,
+  or a managed wallet the browser never holds). An unbound source still reports
+  what it sees and never mismatches.
+- **Holds are per SOURCE, not per address.** `StudioSession.expectChange("wallet")`
+  marks every switch expected until it is released. A flow that walks through
+  specific wallets, such as a multi-signer ceremony, must still check the observed
+  address against the wallets it declared, or a switch to any other wallet goes
+  quiet for the length of the hold.
+- **The UI and the re-auth.** The switch card, the navbar, and signing in again
+  with the new wallet (then `StudioSession.refresh()`) are the host's.
+
+It never signs, sends, writes storage or opens a modal.
+
 ## Dependencies
 
 - `ed25519` (~> 1.3) — Ed25519 signing and the verification equation. It
