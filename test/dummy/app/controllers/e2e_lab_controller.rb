@@ -65,4 +65,11 @@ class E2eLabController < ActionController::Base
   def wallet_transport
     @network_json = Solana::Network.describe(LAB_CLUSTER, environment: LAB_ENVIRONMENT).to_json
   end
+
+  # The wallet identity source. No locals: the surface under test is the shipped
+  # script the LAYOUT loads, and the page only registers it and paints what it
+  # reports, as a host's navbar does. The wallets come from the spec.
+  def wallet_identity
+    @network_json = Solana::Network.describe(LAB_CLUSTER, environment: LAB_ENVIRONMENT).to_json
+  end
 end

@@ -1,0 +1,56 @@
+<%# Drives the SHIPPED wallet identity source in a real browser.
+
+    THE PAGE CARRIES NO SOURCE LOGIC. It does the two things a HOST does with
+    SolanaStudio.walletIdentity and nothing else: it registers the source with a
+    session store, and it paints what the source reports, the way a navbar would.
+    The wallets are the SPEC's, installed by page.addInitScript before this page's
+    scripts run, which is how a real extension injects its provider.
+
+    THE SESSION STORE IS A RECORDER, not studio-engine's store. The engine's
+    session.js is not in any released studio-engine yet, so the lab cannot load it
+    from the installed gem. The recorder only calls source.start(report) and keeps
+    what arrives: it compares nothing, so it cannot decide a mismatch on the gem's
+    behalf. Mismatch, resolve and hold semantics are the node suite's stub and a
+    run against the real engine store; this page proves the shipped bytes RUN.
+
+    `?provider=lab` makes the source watch window.labWallet instead of Phantom's
+    injected global, so one page serves both the default resolver and a host's. %>
+<main data-test="wallet-identity-lab">
+  <p data-test="identity-loaded"><%= "" %></p>
+  <p data-test="wallet-status">not started</p>
+  <p data-test="wallet-provider"><%= "" %></p>
+</main>
+
+<script>
+  (function () {
+    var S = window.SolanaStudio || {};
+    document.querySelector('[data-test="identity-loaded"]').textContent =
+      S.walletIdentity ? 'loaded' : 'MISSING: walletIdentity';
+    if (!S.walletIdentity) return;
+
+    window.labReports = [];
+    var recorder = {
+      registerIdentitySource: function (source) {
+        var stop = source.start(function (value) {
+          window.labReports.push(value === undefined ? 'undefined' : value);
+        });
+        return { name: source.name, unregister: function () { if (typeof stop === 'function') stop(); } };
+      }
+    };
+
+    var options = { session: recorder };
+    if (new URLSearchParams(window.location.search).get('provider') === 'lab') {
+      options.getProvider = function () { return window.labWallet || null; };
+    }
+
+    var wired = S.walletIdentity.register(options);
+
+    function paint(state) {
+      document.querySelector('[data-test="wallet-status"]').textContent =
+        state.status + (state.address ? ':' + state.address : '');
+      document.querySelector('[data-test="wallet-provider"]').textContent = state.providerName || '';
+    }
+    wired.source.subscribe(paint);
+    paint(wired.source.current());
+  })();
+</script>
