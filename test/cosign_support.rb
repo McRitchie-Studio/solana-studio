@@ -111,11 +111,15 @@ module CosignSupport
     }
   end
 
-  def lighthouse_instruction
+  # A Lighthouse ASSERTION, the only kind of Lighthouse instruction the guard
+  # admits. The data is a real AssertAccountInfoMulti (variant 6) Phantom put
+  # into a cosigned mainnet transaction; test/cosign_lighthouse_test.rb carries
+  # every other one, and the variants the guard refuses.
+  def lighthouse_instruction(data: ["06040203000001000000000000000000"].pack("H*"), accounts: nil)
     {
       program_id: LIGHTHOUSE,
-      accounts: [{ pubkey: app_state, is_signer: false, is_writable: false }],
-      data: "\x01\x02\x03assert".b
+      accounts: accounts || [{ pubkey: app_state, is_signer: false, is_writable: false }],
+      data: data.b
     }
   end
 

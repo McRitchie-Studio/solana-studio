@@ -18,7 +18,14 @@ module Solana
     #   4. ComputeBudget is READ, never waved through: only SetComputeUnitLimit
     #      and SetComputeUnitPrice, once each, and the fee they make the fee payer
     #      pay is capped (Cosign::DEFAULT_FEE_MARGIN).
-    #   5. Optionally, the recent blockhash is the one built on (`blockhash:`).
+    #   5. An admitted extra program is READ too, never waved through. A
+    #      Lighthouse instruction passes only when its first data byte is an
+    #      assertion variant (Cosign::LIGHTHOUSE_ASSERTIONS). MemoryWrite, which
+    #      makes a signer — the fee payer included — fund an account, MemoryClose,
+    #      empty data and an unknown variant are refused. Its accounts are not
+    #      compared: an assertion takes no payer and writes nothing, so what it
+    #      names cannot move funds, and Phantom's assertions name the fee payer.
+    #   6. Optionally, the recent blockhash is the one built on (`blockhash:`).
     #      Off by default: turf-monster's production guards never pinned it, and
     #      whether any wallet rewrites it on mainnet has not been measured. Pin it
     #      when last_valid_block_height must describe the returned wire exactly.
@@ -27,16 +34,13 @@ module Solana
     # move the fee payer's funds, and a wallet re-encoding them is not an attack
     # on the house.
     class Expectation
-      # Programs an app may not admit as "extra": each can move lamports, tokens
-      # or fees on its own, which is exactly what an admitted instruction is
-      # trusted never to do.
-      REFUSED_EXTRA_PROGRAMS = [
-        Transaction::SYSTEM_PROGRAM_ID.b,
-        ComputeBudget::PROGRAM_ID.b,
-        Transaction::TOKEN_PROGRAM_ID.b,
-        Keypair.decode_base58("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb").b,
-        Transaction::ASSOCIATED_TOKEN_PROGRAM_ID.b
-      ].freeze
+      # The only programs an app may admit as "extra", each with the rule that
+      # reads its instructions. An admitted instruction skips the comparison in
+      # rule 3, so something must prove it cannot move the fee payer's funds,
+      # and a program id alone proves nothing: Lighthouse carries assertions
+      # AND a MemoryWrite that spends its payer's lamports. A program with no
+      # rule here cannot be admitted.
+      EXTRA_PROGRAM_RULES = { LIGHTHOUSE_PROGRAM_ID.b => :admit_lighthouse! }.freeze
 
       attr_reader :fee_payer, :cosigners, :instructions, :blockhash, :last_valid_block_height,
                   :commitment, :max_compute_unit_price, :max_priority_fee_micro_lamports, :extra_programs
@@ -53,10 +57,11 @@ module Solana
         raise ArgumentError, "the fee payer cannot also be a cosigner" if @cosigners.include?(@fee_payer)
 
         @extra_programs = Array(extra_programs).map { |k| Cosign.key_bytes(k) }.uniq
-        refused = @extra_programs & REFUSED_EXTRA_PROGRAMS
-        unless refused.empty?
-          raise ArgumentError, "cannot admit #{refused.map { |k| Cosign.base58(k) }.join(', ')} as an extra program: " \
-                               "it can move funds or fees on its own"
+        unruled = @extra_programs.reject { |k| EXTRA_PROGRAM_RULES.key?(k) }
+        unless unruled.empty?
+          raise ArgumentError, "cannot admit #{unruled.map { |k| Cosign.base58(k) }.join(', ')} as an extra program: " \
+                               "no rule reads its instructions, so nothing proves they cannot move the fee payer's " \
+                               "funds (admissible: #{EXTRA_PROGRAM_RULES.keys.map { |k| Cosign.base58(k) }.join(', ')})"
         end
 
         @instructions = Array(instructions).map { |ix| normalize_instruction(ix) }
@@ -122,7 +127,7 @@ module Solana
         )
       end
 
-      # The expectation with the recent blockhash pinned. See rule 5 above.
+      # The expectation with the recent blockhash pinned. See rule 6 above.
       def pinned_to(blockhash)
         dup.tap { |copy| copy.instance_variable_set(:@blockhash, Cosign.key_bytes(blockhash)) }
       end
@@ -158,7 +163,7 @@ module Solana
           if ix[:program_id] == ComputeBudget::PROGRAM_ID.b
             read_compute_budget!(ix, index, budget)
           elsif @extra_programs.include?(ix[:program_id])
-            next
+            send(EXTRA_PROGRAM_RULES.fetch(ix[:program_id]), ix, index)
           else
             observed << ix.merge(index: index)
           end
@@ -198,6 +203,26 @@ module Solana
           end
         reject!(:compute_budget_duplicate, "ix #{index} repeats #{kind}") if budget.key?(kind)
         budget[kind] = value
+      end
+
+      # Rule 5 for Lighthouse: see Cosign::LIGHTHOUSE_PROGRAM_ID for the variants
+      # and the mainnet evidence behind this list.
+      def admit_lighthouse!(ix, index)
+        variant = ix[:data].getbyte(0)
+        case variant
+        when nil
+          reject!(:lighthouse_empty_data, "ix #{index} carries no instruction variant")
+        when LIGHTHOUSE_MEMORY_WRITE
+          reject!(:lighthouse_memory_write,
+                  "ix #{index} is Lighthouse MemoryWrite (0): a signer would fund a memory account")
+        when LIGHTHOUSE_MEMORY_CLOSE
+          reject!(:lighthouse_memory_close,
+                  "ix #{index} is Lighthouse MemoryClose (1): a memory-account operation, not an assertion")
+        when LIGHTHOUSE_ASSERTIONS
+          nil
+        else
+          reject!(:lighthouse_unknown_disc, "ix #{index} variant #{variant} is not a Lighthouse assertion")
+        end
       end
 
       def compare_instructions!(observed)
