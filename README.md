@@ -168,6 +168,22 @@ makes the house pay is capped at 10x the builder's own. A System transfer from
 the fee payer, a nonce advance, an extra signer, an altered amount: each is
 refused before the house signs.
 
+**Lighthouse is read, not waved through.** Most Lighthouse instructions are
+assertions, which can only make a transaction fail. Two are not. MemoryWrite
+(variant 0) makes a signer fund a "memory" account of any size, and the fee
+payer signs every cosigned wire, so a wire naming it as payer would lock the
+house's SOL. MemoryClose (variant 1) refunds one. The guard therefore admits a
+Lighthouse instruction only when its first data byte is an assertion variant,
+2 through 17. It refuses 0 (`lighthouse_memory_write`), 1
+(`lighthouse_memory_close`), empty data (`lighthouse_empty_data`) and any other
+byte (`lighthouse_unknown_disc`). It does not refuse an assertion for naming
+the fee payer, because Phantom's assertions check the fee payer's own state.
+The deployed program is immutable, so the variants cannot drift; the mainnet
+evidence is in the `Solana::Cosign::LIGHTHOUSE_PROGRAM_ID` comment.
+`extra_programs:` accepts only programs the guard has such a rule for, which
+today is Lighthouse alone; pass `extra_programs: []` to refuse Lighthouse
+entirely.
+
 **The error class tells you what you may do next.**
 
 | Raised | Sent? | What to do |

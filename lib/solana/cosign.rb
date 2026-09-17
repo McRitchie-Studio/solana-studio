@@ -48,12 +48,44 @@ module Solana
     DEFAULT_FEE_MARGIN = 10
 
     # Lighthouse, Phantom's transaction-protection program. On mainnet Phantom
-    # may insert Lighthouse assertion instructions into a transaction it signs.
-    # They are post-state assertions: they can make a transaction fail, never
-    # move funds or grant authority, so admitting them keeps the fee payer safe.
-    # Without this every protected Phantom signature is refused (turf-monster,
-    # 2026-06-11).
+    # may insert Lighthouse instructions into a transaction it signs, so a guard
+    # that refuses the program refuses every protected Phantom signature
+    # (turf-monster, 2026-06-11).
+    #
+    # NOT EVERY LIGHTHOUSE INSTRUCTION IS AN ASSERTION. The first data byte is
+    # the instruction's variant, and two variants spend a signer's lamports:
+    #
+    #   0  MemoryWrite  the signer named as `payer` funds the rent of a "memory"
+    #                   account whose size the instruction chooses. The fee payer
+    #                   signs every cosigned wire, so a wire naming it as payer
+    #                   locks its SOL — about 0.05 SOL per 10 KiB, repeatable, and
+    #                   recoverable only by a MemoryClose it signs. A drained fee
+    #                   payer stops every gasless transaction.
+    #   1  MemoryClose  refunds a memory account's rent to its payer.
+    #
+    # Variants 2..17 are the sixteen assertions, AssertAccountData through
+    # AssertBubblegumTreeConfigAccount. Each can make a transaction fail; none
+    # moves funds or grants authority. So Expectation#verify! admits a Lighthouse
+    # instruction only when its first byte is 2..17, and refuses 0, 1, empty
+    # data and every other byte. Naming the fee payer is NOT the test: Phantom's
+    # assertions routinely target the fee payer's own post-state.
+    #
+    # Evidence, all read-only against mainnet on 2026-09-16:
+    #   - The program is immutable (no upgrade authority), so the variants
+    #     cannot drift.
+    #   - Simulation: variant 0 made a funded payer fund a 10,008-byte memory
+    #     account (51,490,880 lamports), and variant 1 refunded it. A true
+    #     AssertSysvarClock (15) succeeded and a false one failed its assertion.
+    #   - The program binary names sixteen assertion instructions, and the
+    #     source enum (github.com/Jac0xb/lighthouse, instruction.rs) orders them
+    #     2..17.
+    #   - All 37 Lighthouse instructions in five cosigned mainnet Phantom
+    #     transactions are variant 6 (32) or 10 (5); test/cosign_lighthouse_test.rb
+    #     carries every one.
     LIGHTHOUSE_PROGRAM_ID = Keypair.decode_base58("L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95").freeze
+    LIGHTHOUSE_MEMORY_WRITE = 0
+    LIGHTHOUSE_MEMORY_CLOSE = 1
+    LIGHTHOUSE_ASSERTIONS = (2..17)
 
     DEFAULT_EXTRA_PROGRAMS = [LIGHTHOUSE_PROGRAM_ID].freeze
 
