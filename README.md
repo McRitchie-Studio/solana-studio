@@ -771,7 +771,10 @@ the RPC. The redirect leg also needs a host callback page to call
 
 ## Dependencies
 
-- `ed25519` (~> 1.3) — Ed25519 signing
+- `ed25519` (~> 1.3) — Ed25519 signing and the verification equation. It
+  does not vet the public key, so every verify in this gem
+  (`AuthVerifier.verify!`, `WireMessage#signature_valid?`) runs
+  `Solana::Ed25519Strict` first.
 - Ruby stdlib only (net/http, json, digest, securerandom)
 - **No Rails dependency.** `railties` is a development dependency only; the
   engine loads solely when the host has already loaded Rails.
