@@ -75,6 +75,27 @@ class BorshTest < Minitest::Test
     assert_equal kp.public_key_bytes, encoded
   end
 
+  # [integration] Keypair -> Borsh -> Transaction, in the exact shape turf-monster's
+  # Solana::Vault#build_update_signers writes: an Anchor fixed-length [Pubkey; N]
+  # whose empty tail is padded with the all-'1' zero address, each slot run through
+  # decode_base58 and then encode_pubkey. Before fix-all-ones-base58-decode the
+  # padding slot decoded to 33 bytes, encode_pubkey re-read that binary string as
+  # base58, and the whole instruction raised `Invalid base58 character "\x00"`
+  # (measured against the published 0.11.0 gem).
+  def test_an_anchor_signer_array_padded_with_the_zero_address_encodes_32_bytes_per_slot
+    zero_b58 = "1" * 32
+    signers = Array.new(2) { Solana::Keypair.generate }
+    padded = signers.map(&:address) + [zero_b58, zero_b58, zero_b58]
+
+    data = Solana::Transaction.anchor_discriminator("update_signers") +
+           padded.map { |key| Solana::Borsh.encode_pubkey(Solana::Keypair.decode_base58(key)) }.join
+
+    assert_equal 8 + (32 * 5), data.bytesize
+    slots = data.byteslice(8, 32 * 5).bytes.each_slice(32).map { |b| b.pack("C*") }
+    assert_equal signers.map(&:public_key_bytes), slots.first(2)
+    assert_equal [("\x00" * 32).b] * 3, slots.last(3)
+  end
+
   def test_vec_encoding
     items = [1, 2, 3]
     encoded = Solana::Borsh.encode_vec(items) { |i| Solana::Borsh.encode_u32(i) }

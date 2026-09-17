@@ -136,10 +136,6 @@ module Solana
       return value.b if value.encoding == Encoding::BINARY && value.bytesize == 32
 
       if value.match?(BASE58_PUBKEY)
-        # Keypair.decode_base58 answers 33 bytes for the all-'1' address (the
-        # System Program id), so that one is spelled out.
-        return ("\x00" * 32).b if value == "1" * 32
-
         decoded = Keypair.decode_base58(value)
         return decoded.b if decoded.bytesize == 32
       end

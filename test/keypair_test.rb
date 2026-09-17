@@ -66,6 +66,41 @@ class KeypairTest < Minitest::Test
     assert_equal 0, decoded.bytes[1]
   end
 
+  # REGRESSION (fix-all-ones-base58-decode): an input of only '1's has numeric
+  # value zero, and the decoder used to emit a "00" body for that zero ON TOP of
+  # one zero byte per leading '1' — so the System Program id decoded to 33 bytes,
+  # which no 32-byte pubkey check accepts. Every all-'1' length was one byte long.
+  def test_decode_base58_of_the_all_ones_system_program_is_32_zero_bytes
+    decoded = Solana::Keypair.decode_base58("1" * 32)
+
+    assert_equal 32, decoded.bytesize
+    assert_equal ("\x00" * 32).b, decoded.b
+  end
+
+  def test_decode_base58_of_any_all_ones_input_is_one_zero_byte_per_character
+    [1, 2, 5, 31, 32, 44].each do |length|
+      assert_equal ("\x00" * length).b, Solana::Keypair.decode_base58("1" * length).b,
+                   "#{length} '1's must decode to exactly #{length} zero bytes"
+    end
+  end
+
+  def test_the_zero_key_round_trips_through_base58
+    zero = ("\x00" * 32).b
+    encoded = Solana::Keypair.encode_base58(zero)
+
+    assert_equal "1" * 32, encoded
+    assert_equal zero, Solana::Keypair.decode_base58(encoded).b
+  end
+
+  # The fix must not disturb a value that is NOT zero: leading '1's still add
+  # exactly one zero byte each in front of the decoded body.
+  def test_decode_base58_leading_ones_before_a_nonzero_body_are_unchanged
+    assert_equal "\x00\x00\x01".b, Solana::Keypair.decode_base58("112").b
+
+    kp = Solana::Keypair.generate
+    assert_equal kp.public_key_bytes, Solana::Keypair.decode_base58(kp.to_base58)
+  end
+
   def test_from_json_file
     kp = Solana::Keypair.generate
     tmpfile = "/tmp/test_keypair_#{Process.pid}.json"
