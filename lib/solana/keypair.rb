@@ -90,7 +90,10 @@ module Solana
         num = num * 58 + idx
       end
 
-      hex = num.to_s(16)
+      # A value of zero has NO body: every byte of it is a leading '1', counted
+      # below. `0.to_s(16)` is "0", which padded to "00" used to add a 33rd byte
+      # to the all-'1' System Program id.
+      hex = num.zero? ? "" : num.to_s(16)
       hex = "0" + hex if hex.length.odd?
 
       # Count leading '1's (zero bytes)

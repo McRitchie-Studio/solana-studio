@@ -45,12 +45,65 @@ module Solana
       result.dig("value", "blockhash")
     end
 
+    # A blockhash together with the deadline that comes with it.
+    #
+    # #get_latest_blockhash returns the hash alone, and that discards the one
+    # number that says when a transaction built on it dies:
+    # `last_valid_block_height`. Once the cluster's block height passes it, no
+    # block can include the transaction. Keep it, and a caller can tell a user
+    # "this expired" instead of guessing from an RPC error string.
+    LatestBlockhash = Struct.new(:blockhash, :last_valid_block_height, :slot, :commitment, keyword_init: true)
+
+    # Defaults to "confirmed", unlike #get_latest_blockhash (which stays
+    # "finalized" so no existing caller changes). A finalized hash is already
+    # about 32 slots (~13s) old when fetched, out of a ~150-block life.
+    #
+    # PAIR IT. A transaction built on a "confirmed" hash must be sent with
+    # `preflight_commitment: "confirmed"` (see #send_transaction). The RPC's
+    # default preflight commitment is "finalized", and a finalized bank does not
+    # yet know a fresh confirmed hash, so it answers "Blockhash not found" for a
+    # perfectly valid transaction. Solana::Cosign carries the commitment from
+    # build to send for exactly this reason.
+    def latest_blockhash(commitment: "confirmed")
+      result = call("getLatestBlockhash", [{ commitment: commitment }])
+      value = result && result["value"]
+      unless value && value["blockhash"] && value["lastValidBlockHeight"]
+        raise RpcError.new("getLatestBlockhash returned no blockhash/lastValidBlockHeight")
+      end
+
+      LatestBlockhash.new(
+        blockhash: value["blockhash"],
+        last_valid_block_height: Integer(value["lastValidBlockHeight"]),
+        slot: result.dig("context", "slot"),
+        commitment: commitment
+      )
+    end
+
+    # The cluster's current block height — the number to compare against a
+    # LatestBlockhash#last_valid_block_height. Block height, not slot: skipped
+    # slots do not advance it.
+    def get_block_height(commitment: "confirmed")
+      Integer(call("getBlockHeight", [{ commitment: commitment }]))
+    end
+
+    # Whether the cluster still accepts a transaction anchored on `blockhash`.
+    # Cheap enough to ask before prompting a wallet, when a rebuild is still free
+    # because nothing has been signed.
+    def blockhash_valid?(blockhash, commitment: "confirmed")
+      result = call("isBlockhashValid", [blockhash, { commitment: commitment }])
+      result.is_a?(Hash) ? result["value"] == true : result == true
+    end
+
     def get_minimum_balance_for_rent_exemption(size)
       call("getMinimumBalanceForRentExemption", [size])
     end
 
-    def send_transaction(signed_tx_base64, skip_preflight: false)
+    # `preflight_commitment:` is sent only when given, so every existing caller
+    # keeps the RPC default ("finalized"). Pass the commitment the blockhash was
+    # fetched at — see #latest_blockhash for why the two must match.
+    def send_transaction(signed_tx_base64, skip_preflight: false, preflight_commitment: nil)
       opts = { encoding: "base64", skipPreflight: skip_preflight }
+      opts[:preflightCommitment] = preflight_commitment if preflight_commitment
       call("sendTransaction", [signed_tx_base64, opts])
     end
 

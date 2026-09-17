@@ -34,6 +34,7 @@ module SolanaStudio
         solana_studio/redirect_provider.js
         solana_studio/wallet_journal.js
         solana_studio/wallet_ops.js
+        solana_studio/wallet_identity.js
       ]
     end
   end

@@ -27,6 +27,9 @@
     <script src="/e2e/js/solana_studio/redirect_provider.js"></script>
     <script src="/e2e/js/solana_studio/wallet_journal.js"></script>
     <script src="/e2e/js/solana_studio/wallet_ops.js"></script>
+    <%# The wallet identity source. Inert until a page calls register(), so every
+        lab page can carry it. %>
+    <script src="/e2e/js/solana_studio/wallet_identity.js"></script>
   </head>
   <%# `x-data` ON THE BODY is a HOST responsibility, not decoration.
       studio-engine's modal host roots itself at a bare

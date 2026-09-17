@@ -168,6 +168,16 @@ class E2eLaneContractTest < Minitest::Test
 
     assert_match(%r{/e2e/js/solana_studio/network_guard\.js}, layout,
                  "the lab must load the guard by path from public/e2e")
+    assert_match(%r{/e2e/js/solana_studio/wallet_identity\.js}, layout,
+                 "the lab must load the wallet identity source by path from public/e2e")
+
+    # The wallet identity page registers the source and paints it. Defining the
+    # namespace itself would let e2e/wallet_identity.spec.js grade a copy.
+    identity_page = File.read(File.join(ROOT, "test/dummy/app/views/e2e_lab/wallet_identity.html.erb"))
+    assert_match(/S\.walletIdentity\.register\(/, identity_page,
+                 "the wallet identity page must drive the SHIPPED register()")
+    refute_match(/walletIdentity\s*=/, identity_page,
+                 "the lab page defines walletIdentity itself — the specs would grade the lab")
     assert_match(%r{app.{0,3}"assets".{0,3}"javascripts".{0,3}"solana_studio"}m, boot,
                  "e2e/boot.rb must COPY the gem's real app/assets JavaScript — a lab that served a " \
                  "re-typed copy would report green over a file nobody ships")

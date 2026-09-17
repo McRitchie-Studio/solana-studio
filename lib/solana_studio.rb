@@ -5,8 +5,14 @@ require_relative "solana/transaction"
 require_relative "solana/spl_token"
 require_relative "solana/system_program"
 require_relative "solana/nonce_account"
+require_relative "solana/ed25519_strict"
 require_relative "solana/auth_verifier"
 require_relative "solana/network"
+require_relative "solana/compute_budget"
+require_relative "solana/wire_message"
+# Gasless, cosigned transactions: the house pays the fee, the wallet signs, the
+# server verifies and fills its slot. Keyless — the caller passes the fee payer.
+require_relative "solana/cosign"
 
 # The version is its own file so the release conductor has exactly one literal
 # to rewrite, and so editing this gem's MANIFEST does not read as editing its
