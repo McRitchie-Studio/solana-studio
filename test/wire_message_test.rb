@@ -1,7 +1,9 @@
 require_relative "cosign_support"
+require_relative "ed25519_forgery_support"
 
 class WireMessageTest < Minitest::Test
   include CosignSupport
+  include Ed25519ForgerySupport
 
   def built_wire
     wallet_wire(before: [], after: [lighthouse_instruction])
@@ -70,6 +72,29 @@ class WireMessageTest < Minitest::Test
     refute Solana::WireMessage.parse(tampered).signature_valid?(user_slot)
   end
 
+  # A signer slot the ed25519 gem would pass but the cluster refuses: a
+  # small-order key with a keyless signature. signature_valid? must say no, so
+  # Cosign::Completer refuses the wire before the fee payer signs it.
+  def test_signature_valid_refuses_a_small_order_signer_the_library_accepts
+    SMALL_ORDER_CANONICAL.each do |b58, hex|
+      key = hex_bytes(hex)
+      found = false
+      GRIND_LIMIT.times do |n|
+        message = raw_message(header: [2, 0, 1], keys: [house.public_key_bytes, key, app_program],
+                              blockhash: BLOCKHASH, instructions: [[2, [0, 1], "x#{n}"]])
+        next unless library_accepts?(key, keyless_signature, message)
+  
+        wire = raw_wire(message, 2)
+        wire[1 + 64, 64] = keyless_signature
+        msg = Solana::WireMessage.parse(wire)
+        refute msg.signature_valid?(1), "#{b58} must not count as a valid signer"
+        found = true
+        break
+      end
+      assert found, "control failed for #{b58}: the library never accepted the keyless signature"
+    end
+  end
+  
   def test_base58_round_trips_and_refuses_non_base58
     wire = built_wire
     msg = Solana::WireMessage.parse_base58(Solana::Keypair.encode_base58(wire))
