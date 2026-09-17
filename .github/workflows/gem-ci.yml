@@ -88,7 +88,8 @@ jobs:
             app/views/solana_studio/modals/_web3_step_up.html.erb \
             app/views/solana_studio/_phantom_deeplink.html.erb \
             app/views/solana_studio/_deeplink_assets.html.erb \
-            app/assets/javascripts/solana_studio/network_guard.js
+            app/assets/javascripts/solana_studio/network_guard.js \
+            app/assets/javascripts/solana_studio/wallet_identity.js
           do
             echo "$contents" | grep -qF "$required" || {
               echo "MISSING FROM BUILT GEM: $required"
