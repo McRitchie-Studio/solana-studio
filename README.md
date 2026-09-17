@@ -778,7 +778,10 @@ identities a page was rendered for with the identities the browser observes now,
 and it stays web2: it never learns what a wallet is. This file supplies that
 half, and nothing else in the gem depends on it.
 
-Load it after `studio/session.js`, then register once per page:
+Load it after `studio/session.js`, then register once per window. Registering
+the same name twice throws, and on a Turbo host the session store and its
+registrations outlive a visit, so a script that runs on every visit must register
+only the first time:
 
 ```erb
 <%= javascript_include_tag "studio/session" %>

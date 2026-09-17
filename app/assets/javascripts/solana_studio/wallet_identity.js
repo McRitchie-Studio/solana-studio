@@ -8,7 +8,8 @@
 //   StudioSession.registerIdentitySource({ name, start(report), bound?, equals? })
 //
 // This file is that source for a Solana wallet. The identity it observes is the
-// connected wallet address. A host registers it once per page:
+// connected wallet address. A host registers it once per window (a Turbo visit
+// keeps the store and the registration; the same name twice throws):
 //
 //   var wallet = SolanaStudio.walletIdentity.register({ getProvider: ..., trustedConnect: ... });
 //   wallet.source.current();   // { status, address, providerName }
