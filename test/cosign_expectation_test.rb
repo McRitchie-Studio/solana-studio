@@ -67,6 +67,18 @@ class CosignExpectationTest < Minitest::Test
     assert_rejected(:fee_payer_mismatch, wire)
   end
 
+  def test_refuses_a_read_only_fee_payer
+    # Both signers declared read-only: the keys and instructions all match, so
+    # only the fee payer's writability can refuse it.
+    keys = [house.public_key_bytes, user.public_key_bytes, app_state, SYSTEM, app_program,
+            Solana::ComputeBudget::PROGRAM_ID]
+    budget = [[5, [], Solana::ComputeBudget.set_compute_unit_price(PRICE)[:data]],
+              [5, [], Solana::ComputeBudget.set_compute_unit_limit(LIMIT)[:data]]]
+    message = raw_message(header: [2, 2, 3], keys: keys, blockhash: BLOCKHASH,
+                          instructions: budget + [[4, [1, 2, 3], app_instruction[:data]]])
+    assert_rejected(:fee_payer_not_writable, raw_wire(message, 2))
+  end
+
   def test_refuses_a_system_transfer_draining_the_fee_payer
     drain = system_transfer_from(house.public_key_bytes, user.public_key_bytes, 5_000_000_000)
     error = assert_rejected(:unexpected_instruction, wallet_wire(after: [drain]))

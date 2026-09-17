@@ -36,6 +36,16 @@ class WireMessageTest < Minitest::Test
     refute msg.writable?("\x05".b * 32), "an absent key is not writable"
   end
 
+  def test_a_readonly_signer_is_not_writable
+    keys = [house.public_key_bytes, user.public_key_bytes, app_state, app_program]
+    message = raw_message(header: [2, 1, 1], keys: keys, blockhash: BLOCKHASH, instructions: [[3, [0, 1, 2], "x"]])
+    msg = Solana::WireMessage.parse(raw_wire(message, 2))
+    assert msg.writable?(0)
+    refute msg.writable?(1), "the header's one read-only signer is the last signer"
+    assert msg.writable?(2)
+    refute msg.writable?(3)
+  end
+
   def test_signature_is_the_first_slot_and_needs_it_filled
     wire = built_wire
     error = assert_raises(Solana::WireMessage::MalformedError) { Solana::WireMessage.parse(wire).signature }
