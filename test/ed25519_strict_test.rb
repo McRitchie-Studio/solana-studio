@@ -77,11 +77,17 @@ class Ed25519StrictTest < Minitest::Test
     refute STRICT.verify(kp.public_key_bytes, signature, "hellO")
   end
 
+  # Two keyless signatures per key. The second has a prime-order R and a reduced
+  # S, so it passes signature_problem: only the key check can refuse it.
   def test_verify_refuses_every_small_order_key_the_library_accepts
+    prime_r = STRICT.encode_point(STRICT.scalar_mult(12_345, BASE_POINT)) + le_bytes(12_345)
+    assert_nil STRICT.signature_problem(prime_r)
     SMALL_ORDER_KEYS.each do |b58, hex|
       key = hex_bytes(hex)
-      message, signature, = grind(key, message_for: ->(n) { "m#{n}" }, signature_for: ->(_) { keyless_signature })
-      refute STRICT.verify(key, signature, message), b58
+      [keyless_signature, prime_r].each do |candidate|
+        message, signature, = grind(key, message_for: ->(n) { "m#{n}" }, signature_for: ->(_) { candidate })
+        refute STRICT.verify(key, signature, message), b58
+      end
     end
   end
 

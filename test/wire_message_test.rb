@@ -74,18 +74,21 @@ class WireMessageTest < Minitest::Test
 
   # A signer slot the ed25519 gem would pass but the cluster refuses: a
   # small-order key with a keyless signature. signature_valid? must say no, so
-  # Cosign::Completer refuses the wire before the fee payer signs it.
+  # Cosign::Completer refuses the wire before the fee payer signs it. R is
+  # prime-order and S reduced, so only the key check can refuse this slot.
   def test_signature_valid_refuses_a_small_order_signer_the_library_accepts
+    keyless = STRICT.encode_point(STRICT.scalar_mult(12_345, BASE_POINT)) + le_bytes(12_345)
+    assert_nil STRICT.signature_problem(keyless)
     SMALL_ORDER_CANONICAL.each do |b58, hex|
       key = hex_bytes(hex)
       found = false
       GRIND_LIMIT.times do |n|
         message = raw_message(header: [2, 0, 1], keys: [house.public_key_bytes, key, app_program],
                               blockhash: BLOCKHASH, instructions: [[2, [0, 1], "x#{n}"]])
-        next unless library_accepts?(key, keyless_signature, message)
-  
+        next unless library_accepts?(key, keyless, message)
+
         wire = raw_wire(message, 2)
-        wire[1 + 64, 64] = keyless_signature
+        wire[1 + 64, 64] = keyless
         msg = Solana::WireMessage.parse(wire)
         refute msg.signature_valid?(1), "#{b58} must not count as a valid signer"
         found = true
