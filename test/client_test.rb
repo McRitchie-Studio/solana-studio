@@ -99,4 +99,70 @@ class Solana::ClientTest < Minitest::Test
     value = client.simulate_transaction("BASE64TX")
     refute_nil value["err"]
   end
+
+  # A client whose transport answers with `result_json` and remembers the body.
+  def canned_client(result_json)
+    client = Solana::Client.new(rpc_url: "https://api.devnet.solana.com")
+    bodies = []
+    client.define_singleton_method(:http_post) do |body|
+      bodies << body
+      resp = Object.new
+      resp.define_singleton_method(:body) { %({"jsonrpc":"2.0","id":1,"result":#{result_json}}) }
+      resp
+    end
+    [client, bodies]
+  end
+
+  def test_latest_blockhash_keeps_the_deadline_and_defaults_to_confirmed
+    client, bodies = canned_client(
+      '{"context":{"slot":321},"value":{"blockhash":"EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N","lastValidBlockHeight":3090}}'
+    )
+    latest = client.latest_blockhash
+
+    assert_equal "getLatestBlockhash", bodies[0][:method]
+    assert_equal [{ commitment: "confirmed" }], bodies[0][:params]
+    assert_equal "EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N", latest.blockhash
+    assert_equal 3090, latest.last_valid_block_height
+    assert_equal 321, latest.slot
+    assert_equal "confirmed", latest.commitment
+  end
+
+  def test_latest_blockhash_refuses_an_answer_without_the_deadline
+    client, = canned_client('{"context":{"slot":1},"value":{"blockhash":"EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N"}}')
+    assert_raises(Solana::Client::RpcError) { client.latest_blockhash }
+  end
+
+  def test_get_latest_blockhash_is_unchanged_for_existing_callers
+    client, bodies = canned_client('{"context":{"slot":1},"value":{"blockhash":"abc","lastValidBlockHeight":9}}')
+    assert_equal "abc", client.get_latest_blockhash
+    assert_equal [{ commitment: "finalized" }], bodies[0][:params]
+  end
+
+  def test_get_block_height_passes_commitment
+    client, bodies = canned_client("4242")
+    assert_equal 4242, client.get_block_height
+    assert_equal "getBlockHeight", bodies[0][:method]
+    assert_equal [{ commitment: "confirmed" }], bodies[0][:params]
+  end
+
+  def test_blockhash_valid_reads_the_value_flag
+    client, bodies = canned_client('{"context":{"slot":1},"value":false}')
+    refute client.blockhash_valid?("abc", commitment: "processed")
+    assert_equal "isBlockhashValid", bodies[0][:method]
+    assert_equal ["abc", { commitment: "processed" }], bodies[0][:params]
+
+    client, = canned_client('{"context":{"slot":1},"value":true}')
+    assert client.blockhash_valid?("abc")
+  end
+
+  # The RPC default preflight commitment is "finalized". A caller that never
+  # asks must keep getting exactly the options it got before.
+  def test_send_transaction_omits_preflight_commitment_unless_given
+    client, bodies = canned_client('"SIG"')
+    client.send_transaction("WIRE")
+    assert_equal({ encoding: "base64", skipPreflight: false }, bodies[0][:params][1])
+
+    client.send_transaction("WIRE", preflight_commitment: "confirmed")
+    assert_equal({ encoding: "base64", skipPreflight: false, preflightCommitment: "confirmed" }, bodies[1][:params][1])
+  end
 end

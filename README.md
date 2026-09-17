@@ -39,7 +39,10 @@ signature = kp.sign("hello".b)
 client = Solana::Client.new(rpc_url: "https://api.devnet.solana.com")
 
 client.get_balance("9Fy8P3DvKBh3awt...")
-client.get_latest_blockhash
+client.get_latest_blockhash                      # hash only, "finalized"
+client.latest_blockhash                          # hash + last_valid_block_height, "confirmed"
+client.get_block_height                          # compare against last_valid_block_height
+client.send_transaction(wire_b64, preflight_commitment: "confirmed")  # match the fetch
 client.request_airdrop("9Fy8P3DvKBh3awt...", 1_000_000_000)
 client.send_and_confirm(signed_tx_base64)
 ```
@@ -105,6 +108,92 @@ Solana::Network.alignment(cluster: "devnet", genesis_hash: live_hash)
 genesis is minted per boot) or an unrecognized cluster name. Treating it as
 `:mismatched` refuses to boot every local validator; treating it as `:aligned`
 trusts a chain nobody checked.
+
+### Gasless cosigned transactions (`Solana::Cosign`)
+
+The pattern every app with a house wallet needs: **the user's wallet signs, the
+house pays the fee**, so users never hold SOL. The server builds the transaction
+with its fee payer in account 0 and an empty slot for each cosigner, the wallet
+signs, and the server proves the returned wire is still what it built before it
+adds its own signature.
+
+The gem holds no keys and knows no program. The caller passes the fee payer's
+`Solana::Keypair` in and supplies its own instructions.
+
+```ruby
+client  = Solana::Client.new
+builder = Solana::Cosign::Builder.new(client: client, fee_payer: house_keypair)
+
+prepared = builder.build(
+  instructions: [my_program_instruction],   # { program_id:, accounts:, data: }
+  cosigners: [user_wallet_address],
+  compute_unit_price: 50_000,               # a priority fee; fee-less txs drop on mainnet
+  compute_unit_limit: 200_000
+)
+prepared.wire_base64              # hand this to the wallet
+prepared.wire_base58              # or this: what a walletOps `prepare` returns
+prepared.last_valid_block_height  # the deadline: past this height it can never land
+```
+
+Store `prepared.wire_base64` and `prepared.last_valid_block_height` server-side
+when the signature comes back in a later request, then:
+
+```ruby
+expectation = Solana::Cosign::Expectation.from_wire(stored_wire, fee_payer: house_keypair,
+                                                    last_valid_block_height: stored_height)
+completer = Solana::Cosign::Completer.new(client: client, fee_payer: house_keypair)
+
+result = completer.complete(signed_wire_from_wallet, expectation: expectation,
+                            before_send: ->(signature) { record.update!(signature: signature) })
+result.signature
+```
+
+A wire from `SolanaStudio.walletOps` arrives in base58: pass `encoding: :base58`
+to `#verify!`, `#cosign`, `#complete` or `Expectation.from_wire`. The encoding is
+declared, never guessed — every base58 string is also made of base64 characters.
+
+`#complete` runs, in order: judge the wire, check every cosigner signature, fill
+the fee payer's slot (`Transaction.cosign_wire`), check the block height against
+the deadline, simulate, call `before_send`, send, confirm. `#cosign` stops after
+the fee payer signs (no RPC), for a flow whose browser broadcasts. `#verify!`
+only judges.
+
+**How the wire is judged.** A wallet re-encodes what it signs, and on mainnet
+Phantom may insert Lighthouse instructions, so bytes are never compared. The
+fee payer must be account 0 and writable; the signer set must be exactly the
+fee payer plus the cosigners; with ComputeBudget and admitted extra programs
+(Lighthouse by default) set aside, the instructions must equal the built ones —
+program, ordered accounts, data and order; ComputeBudget is read and the fee it
+makes the house pay is capped at 10x the builder's own. A System transfer from
+the fee payer, a nonce advance, an extra signer, an altered amount: each is
+refused before the house signs.
+
+**The error class tells you what you may do next.**
+
+| Raised | Sent? | What to do |
+|---|---|---|
+| `WireRejected` | No | Refuse. `#reason` is a stable code; the message is for logs only. |
+| `PreflightRejected` → `BlockhashExpired`, `SimulationFailed` | Provably not | Rebuild freely. `BlockhashExpired` means ask the user to sign again. |
+| `BroadcastFailed` → `BroadcastExpired` | Maybe | Look `#signature` up on chain before rebuilding. |
+| `TransactionFailed` | Landed, failed | The fee was paid. `#err` has the program error. |
+
+`BroadcastExpired` is deliberately NOT a `PreflightRejected`: `Solana::Client`
+retries a lost answer by re-posting the same wire, so a send-time "Blockhash not
+found" can follow an attempt that was already forwarded.
+
+**Build and send at the same commitment.** The builder fetches at `"confirmed"`
+by default and the completer preflights at the commitment the expectation
+carries. A confirmed blockhash sent with the RPC's default `"finalized"`
+preflight is refused as `Blockhash not found` while still valid.
+
+**Wallet-first by default.** Every slot starts empty and the house signs last.
+`presign: true` signs the fee payer's slot at build instead — the order Phantom
+can flag as "could be malicious" — and exists only so server-first flows can
+adopt the builder before they flip.
+
+No durable nonce: a nonce transaction is recognized only when
+`advanceNonceAccount` is instruction 0, and Phantom inserts instructions ahead of
+it, so a nonce cannot anchor a wallet-signed transaction.
 
 ## Rails engine (optional)
 
@@ -675,32 +764,33 @@ the RPC. The redirect leg also needs a host callback page to call
 
 See [RUNBOOK.md](./RUNBOOK.md) for troubleshooting and local test commands.
 
-### 🧊 The durable-nonce primitives have two consumers, and one of them is on ice
+### The durable-nonce primitives: one consumer left, and it is a dead route
 
 `Solana::SystemProgram` and `Solana::NonceAccount` landed together in **v0.4.6
-(2026-06-02, `11ec512`)** for **two** consumers at once, and the commit says so:
-*"the reusable core for the signing console's two-browser flow and for making
-turf's operator tx flows expiry-immune."*
+(2026-06-02, `11ec512`)** for two consumers: McRitchie Studio's signing console
+and turf-monster's operator transactions. **Neither is a live flow now.**
+Re-measured 2026-09-16 against turf-monster `origin/accepted` (`61185cdd`); this
+note used to say otherwise.
 
-**The first of those went on ice on 2026-08-31.** McRitchie Studio's admin
-signing console — N wallets signing in separate browsers, anchored on a durable
-nonce so a half-signed transaction does not expire between signers — is **frozen
-in place: still working, not removed, not deprecated**, and not expected to drive
-any further work in this gem. Its full note (why it was frozen, and the one
-question that would revive it) lives in the hub, at `docs/SIGNING_CONSOLE_V2.md`.
+- **The signing console is gone.** It was frozen on 2026-08-31 and deleted on
+  2026-09-04 (the hub's `retire-signing-console` task), with its doc.
+- **turf-monster reaches the nonce from one dead route.**
+  `Solana::Vault#durable_nonce_config` has one caller,
+  `#build_create_contest(admin_signs: true)`, reached only from
+  `ContestsController#prepare_onchain_contest`. Nothing under `app/views` or
+  `app/javascript` calls that route; only `e2e/rpc-mock.js` names it.
+- **No cosign guard admits a nonce advance.** turf-monster's cosign guards
+  refuse every System instruction, `advanceNonceAccount` included, and so does
+  `Solana::Cosign`.
+- **A nonce cannot anchor a wallet-signed transaction.** A nonce transaction is
+  recognized only when `advanceNonceAccount` is instruction 0, and Phantom
+  inserts Lighthouse instructions ahead of it (turf-monster mainnet incident,
+  2026-06-11). That is why Mr. McRitchie dropped nonce support from the
+  primitives extraction on 2026-09-16.
 
-**Do not read that as permission to drop these two files.** The second consumer
-is the one in production:
-
-| Primitive | Live use |
-|---|---|
-| `Solana::SystemProgram.advance_nonce_account` | turf-monster prepends it as **instruction #0** of a durable-nonce vault cosign transaction (`app/services/solana/vault.rb`). Its cosign validator also **allow-lists exactly this one System instruction** — a nonce-anchored entry with any other System instruction is rejected. |
-| `Solana::NonceAccount.parse` | turf-monster reads the on-chain nonce account in the same path. |
-
-So the frozen consumer is the *quieter* one, never the only one. Both primitives
-are byte-match tested in `test/system_program_test.rb`, and a change to either
-still lands on turf-monster's money path — treat them as `onchain`, not as dead
-code left over from a shelved tool.
+The files stay, byte-match tested in `test/system_program_test.rb`, until
+turf-monster decides the dead route's fate. Removing them first would break that
+route's build step.
 
 ### The browser lane
 

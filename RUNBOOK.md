@@ -17,8 +17,8 @@ Troubleshooting guide for autonomous agents. Format: problem, diagnosis, fix.
 - Fix: Reduce call frequency or switch to a paid RPC endpoint with higher rate limits. The client retries with backoff -- check `send_rpc` for the retry count and delay.
 
 **Expired blockhash on retry**
-- Diagnosis: Transaction built with one blockhash, but by the time it's submitted after retries, the blockhash has expired. Error: `Blockhash not found`.
-- Fix: The client's retry logic handles this by re-fetching the blockhash. If it still fails, the transaction was too slow to build. Simplify the transaction or fetch a fresh blockhash immediately before signing: `client.get_latest_blockhash`.
+- Diagnosis: `Solana::Client#call` retries a 429, a read timeout, a reset connection and a `Blockhash not found` answer by RE-POSTING THE SAME REQUEST. It never fetches a new blockhash, so a `sendTransaction` retry re-sends the same signed wire, and an expired one stays expired through every retry. A read timeout means the node may already have forwarded the first attempt.
+- Fix: Rebuild with a fresh blockhash and have every signer sign again; a signed transaction cannot be re-anchored. Before rebuilding after any send-time error, look the transaction's signature up on chain (`client.confirm_transaction(signature)`), because the first attempt may have landed. `Solana::Cosign::Completer` types this: `PreflightRejected` is provably unsent, `BroadcastFailed` means reconcile first.
 
 ## Keypair Loading Errors
 
@@ -37,20 +37,20 @@ Troubleshooting guide for autonomous agents. Format: problem, diagnosis, fix.
 ## Transaction Failures
 
 **Expired blockhash**
-- Diagnosis: `Transaction simulation failed: Blockhash not found`. Blockhashes expire after ~60 seconds.
-- Fix: Fetch the blockhash as close to signing as possible. Do not cache blockhashes. Pattern: `blockhash = client.get_latest_blockhash; tx.sign(keypairs, blockhash); client.send_transaction(tx.serialize)`.
+- Diagnosis: `Transaction simulation failed: Blockhash not found`. A transaction dies once the cluster's block height passes the blockhash's `lastValidBlockHeight` (about 150 blocks, 60-90 seconds). Two other causes give the same text: a blockhash fetched at `"finalized"` is already ~13s old, and a blockhash fetched at `"confirmed"` but sent with the RPC's default `"finalized"` preflight is refused while still valid.
+- Fix: Fetch as close to signing as possible, keep the deadline, and send at the commitment you fetched at: `latest = client.latest_blockhash` (confirmed, with `last_valid_block_height`); `tx.set_recent_blockhash(latest.blockhash)`; sign; `client.send_transaction(tx.serialize_base64, preflight_commitment: latest.commitment)`. To tell expiry from lag, compare `client.get_block_height` with `latest.last_valid_block_height`: only a height past it is expiry.
 
 **Insufficient SOL for transaction fees**
 - Diagnosis: `Transaction simulation failed: Attempt to debit an account but found no record of a prior credit`. The signing account has no SOL.
 - Fix: Fund the account. Follow the devnet faucet protocol: (1) `devnet-pow mine --target-lamports 2000000000 -ud`, (2) QuickNode faucet, (3) Solana Foundation faucet, (4) `solana airdrop 1 --url devnet`, (5) transfer from another funded wallet.
 
 **PDA derivation mismatch**
-- Diagnosis: `Transaction.find_pda(program_id, seeds)` returns a different address than expected. Seeds or program ID don't match what the on-chain program expects.
-- Fix: Verify seeds match exactly. PDA seeds are order-sensitive and byte-exact. Common issues: string encoding (UTF-8 vs raw bytes), pubkey as 32-byte binary (not base58 string). Example: `Transaction.find_pda("7Hy8...", [b"vault"])` for the vault PDA.
+- Diagnosis: `Transaction.find_pda(seeds, program_id)` returns a different address than expected. Seeds or program ID don't match what the on-chain program expects.
+- Fix: Verify seeds match exactly. PDA seeds are order-sensitive and byte-exact. Common issues: string encoding (UTF-8 vs raw bytes), pubkey as 32-byte binary (not base58 string), and the argument order (seeds FIRST). Example: `Solana::Transaction.find_pda(["vault"], program_id)` for a vault PDA seeded `[b"vault"]`.
 
 **Anchor discriminator mismatch**
 - Diagnosis: Transaction rejected with "Program log: AnchorError ... InstructionFallbackNotFound". The 8-byte discriminator doesn't match.
-- Fix: `Transaction.anchor_discriminator("instruction_name")` must match the Anchor program's expected discriminator. The name is the snake_case Rust function name prefixed with `global:` -- e.g. `anchor_discriminator("global:create_contest")`. Verify against the IDL.
+- Fix: `Transaction.anchor_discriminator("instruction_name")` must match the Anchor program's expected discriminator: the first 8 bytes of `SHA256("global:<snake_case_name>")`. The method adds the `global:` prefix itself, so pass the bare name -- e.g. `anchor_discriminator("create_contest")`; passing `"global:create_contest"` hashes `global:global:create_contest`. Verify against the IDL.
 
 ## Zeitwerk Autoload Conflict
 
