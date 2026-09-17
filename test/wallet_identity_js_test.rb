@@ -449,6 +449,26 @@ class WalletIdentityJsTest < Minitest::Test
     assert_equal "connected:#{B}", result["afterRescan"]
   end
 
+  def test_a_resolver_that_briefly_answers_null_keeps_the_bound_provider
+    # A wallet object does not leave a live page, but a host registry can answer
+    # null for a moment while it swaps interfaces. That must not read as no wallet.
+    result = run_js(<<~JS)
+      var phantom = fakePhantom({ address: A });
+      var answer = phantom;
+      var source = WI.create({ getProvider: function () { return answer; } });
+      var log = track(source);
+      answer = null;
+      window.dispatch("focus");
+      var afterNull = view(source);
+      phantom.userSwitches(B);
+      return { afterNull: afterNull, now: view(source), reports: log.reports };
+    JS
+
+    assert_equal "connected:#{A}", result["afterNull"]
+    assert_equal "connected:#{B}", result["now"], "the kept binding still hears its wallet"
+    assert_equal [A, B], result["reports"]
+  end
+
   def test_a_throwing_resolver_reads_as_no_provider
     result = run_js(<<~JS)
       var source = WI.create({ getProvider: function () { throw new Error("registry not ready"); }, discoveryMs: 0 });
@@ -852,18 +872,29 @@ class WalletIdentityJsTest < Minitest::Test
   end
 
   def test_a_wallet_event_during_the_silent_connect_wins_over_its_answer
+    # The probe's answer was true when the wallet produced it; an event since is
+    # newer. The disconnect case is the one that bites: the wallet's live read is
+    # empty, so only the ordering keeps the probe's stale key from reviving it.
     result = run_js(<<~JS)
-      var phantom = fakePhantom({ deferConnect: true });
-      var source = WI.create({ getProvider: function () { return phantom; }, trustedConnect: true });
-      var log = track(source);
-      phantom.userSwitches(B);
-      phantom.pendingConnect.resolve({ publicKey: key(A) });
+      var switched = fakePhantom({ deferConnect: true });
+      var a = WI.create({ getProvider: function () { return switched; }, trustedConnect: true });
+      var logA = track(a);
+      switched.userSwitches(B);
+      switched.pendingConnect.resolve({ publicKey: key(A) });
+
+      var locked = fakePhantom({ deferConnect: true });
+      var b = WI.create({ getProvider: function () { return locked; }, trustedConnect: true });
+      var logB = track(b);
+      locked.userSwitches(null);
+      locked.pendingConnect.resolve({ publicKey: key(A) });
       await flush();
-      return { now: view(source), reports: log.reports };
+      return { switched: view(a), switchedReports: logA.reports, locked: view(b), lockedReports: logB.reports };
     JS
 
-    assert_equal "connected:#{B}", result["now"]
-    assert_equal [B], result["reports"]
+    assert_equal "connected:#{B}", result["switched"]
+    assert_equal [B], result["switchedReports"]
+    assert_equal "disconnected", result["locked"]
+    assert_equal [nil], result["lockedReports"]
   end
 
   def test_a_reconcile_probe_keeps_the_settled_status_until_it_answers
