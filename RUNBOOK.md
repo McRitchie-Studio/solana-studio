@@ -14,7 +14,7 @@ Troubleshooting guide for autonomous agents. Format: problem, diagnosis, fix.
 
 **Rate limit (HTTP 429)**
 - Diagnosis: `Solana::Client` retries on 429 automatically (built-in retry logic). If retries are exhausted, the call raises.
-- Fix: Reduce call frequency or switch to a paid RPC endpoint with higher rate limits. The client retries with backoff -- check `send_rpc` for the retry count and delay.
+- Fix: Reduce call frequency or switch to a paid RPC endpoint with higher rate limits. The retry lives in `Solana::Client#call`: up to `MAX_RETRIES` (3) retries after the first try, sleeping `RETRY_DELAY` times the retry number (1s, 2s, 3s). It keys on the JSON-RPC error `code` (429) in the response body, not on the HTTP status.
 
 **Expired blockhash on retry**
 - Diagnosis: `Solana::Client#call` retries a 429, a read timeout, a reset connection and a `Blockhash not found` answer by RE-POSTING THE SAME REQUEST. It never fetches a new blockhash, so a `sendTransaction` retry re-sends the same signed wire, and an expired one stays expired through every retry. A read timeout means the node may already have forwarded the first attempt.
