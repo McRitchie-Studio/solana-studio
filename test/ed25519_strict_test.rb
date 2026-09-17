@@ -102,6 +102,10 @@ class Ed25519StrictTest < Minitest::Test
     message, signature, = grind(key, message_for: ->(n) { "s#{n}" }, signature_for: ->(m) { unreduced(keypair(seed).sign(m)) })
     refute STRICT.verify(key, signature, message)
     assert_equal "S is not reduced below the group order", STRICT.signature_problem(signature)
+
+    # The boundary is strict, as the cluster's is: S = L is refused, L - 1 is not.
+    assert_equal "S is not reduced below the group order", STRICT.signature_problem(signature.byteslice(0, 32) + le_bytes(L))
+    assert_nil STRICT.signature_problem(signature.byteslice(0, 32) + le_bytes(L - 1))
   end
 
   def test_malformed_input_is_refused_without_raising
