@@ -15,7 +15,18 @@ group :development, :test do
   # Development-only: a consumer already bundles studio-engine, and making it a
   # runtime dependency would drag a Rails engine into every plain-Ruby consumer
   # of this gem — the exact coupling lib/solana_studio/engine.rb exists to avoid.
-  gem "studio-engine", "~> 0.57"
+  #
+  # FLOOR 0.81.1, and why the floor and not a redis pin: studio-engine 0.81.1 is
+  # the release that declares `redis < 6` (ActionCable's Redis adapter breaks on
+  # redis 6). Under the old `~> 0.57` a lock that had already resolved redis
+  # 6.0.0 beside engine 0.81.0 could never move — the release conductor's
+  # `bundle lock --update studio-engine --conservative` may not touch redis, so
+  # it re-resolved 0.81.0 and stalled rel-20260930-ec66da. Raising the floor
+  # states the real dependency (we need an engine that knows about redis 6) and
+  # lets the engine carry its own ceiling; a `gem "redis", "< 6"` here would
+  # duplicate that ceiling and outlive the day the engine lifts it. `~> 0.81`
+  # keeps the pre-1.0 ceiling the old pin had.
+  gem "studio-engine", "~> 0.81", ">= 0.81.1"
   # The RENDER tier (test/views/) parses the card it just rendered. DECLARED
   # rather than leaned on as actionview's transitive dependency, because the
   # suite requires it directly and a transitive it does not name can vanish
