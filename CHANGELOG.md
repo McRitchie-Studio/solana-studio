@@ -4,6 +4,8 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pro
 
 ## Unreleased
 
+## v0.12.1 (2026-09-30)
+
 ### Changed
 - **Development bundle: studio-engine floor raised to 0.81.1** (`Gemfile`). 0.81.1 declares `redis < 6`; the old `~> 0.57` let a lock that already held redis 6.0.0 keep studio-engine at 0.81.0 under a conservative update. Development and test only; the gem's runtime dependencies are unchanged.
 
