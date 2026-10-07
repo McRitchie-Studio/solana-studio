@@ -260,8 +260,11 @@ module Solana
       HttpError.new("HTTP #{status} from RPC: #{excerpt(response)}", code: status)
     end
 
+    # The start of the body, safe to interpolate: an upstream error page can be
+    # Latin-1 or gzip bytes (Net::HTTP hands those back as ASCII-8BIT), and
+    # mixing them into a UTF-8 message raises Encoding::CompatibilityError.
     def excerpt(response)
-      text = response.body.to_s.strip
+      text = response.body.to_s.dup.force_encoding(Encoding::UTF_8).scrub("?").strip
       text.length > BODY_EXCERPT ? "#{text[0, BODY_EXCERPT]}…" : text
     end
 

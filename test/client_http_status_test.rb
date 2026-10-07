@@ -242,6 +242,26 @@ class Solana::ClientHttpStatusTest < Minitest::Test
     assert_operator error.message.length, :<, 400
   end
 
+  def test_a_binary_body_raises_rpc_error_not_an_encoding_error
+    # Net::HTTP returns an undeclared-charset body as ASCII-8BIT. A Latin-1
+    # error page or a gzip body sent without Content-Encoding must still
+    # become an RpcError the caller can rescue.
+    latin1 = "<html>Servi\xE7o indispon\xEDvel</html>".b
+    gzipped = "\x1F\x8B\b\x00\x00\x00\x00\x00\x00\x03\xCB".b
+    [["503", latin1], ["502", gzipped], ["200", gzipped], ["401", latin1]].each do |code, body|
+      client, = scripted_client(FakeResponse.new(code, body, {}))
+
+      error = assert_raises(Solana::Client::RpcError) { client.get_balance("W1") }
+
+      assert_equal Integer(code), error.code
+      assert_equal Encoding::UTF_8, error.message.encoding, "HTTP #{code}: message must be UTF-8"
+      assert error.message.valid_encoding?, "HTTP #{code}: message must be valid UTF-8"
+      # What a host does with it: turf-monster's health check prints it after a
+      # non-ASCII mark, which raised on a binary message.
+      assert_includes "✗ failed: #{error.message}", "HTTP #{code}"
+    end
+  end
+
   # --- Transports that report no status ------------------------------------------
 
   def test_a_transport_without_a_status_is_parsed_as_before
