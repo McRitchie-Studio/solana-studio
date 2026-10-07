@@ -4,6 +4,8 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pro
 
 ## Unreleased
 
+## v0.12.3 (2026-10-07)
+
 ### Fixed
 - **`Solana::Client#call` has a total-wait budget, so one call can no longer sleep past a web request's timeout** (`lib/solana/client.rb`). The 429/5xx retry shipped in 0.12.2 honours `Retry-After` up to 10s, three times, plus jitter: about 31.5s of sleeping in one call, past Heroku's 30s request timeout on the turf-monster paths that call Solana inside a request. Now a call sums its waits and, when the next wait would carry that sum past its budget, raises its last error at once instead of sleeping; it never sleeps part of a wait. A `Retry-After` larger than what is left raises straight away. The budget is `DEFAULT_WAIT_BUDGET` = 15s, set per client with `Solana::Client.new(wait_budget:)` and per call with `Solana::Client.with_wait_budget(seconds) { ... }`, which applies to every call the current thread makes inside the block, restores the outer budget when it ends, and must be opened inside a `Thread.new` body to reach it. It bounds the waits between attempts only, not each attempt's time on the wire (`open_timeout` 10s, `read_timeout` 30s are unchanged). Network-error retries share the same budget. Linear backoff alone (1s + 2s + 3s) fits the default, so ordinary retries are unchanged.
 
