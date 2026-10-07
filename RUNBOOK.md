@@ -12,12 +12,12 @@ Troubleshooting guide for autonomous agents. Format: problem, diagnosis, fix.
 - Diagnosis: Client silently defaults to devnet public RPC when `SOLANA_RPC_URL` is unset. Transactions land on the wrong network.
 - Fix: Set the env var explicitly. In Rails: check `.env` file. On Heroku: `heroku config:get SOLANA_RPC_URL --app <app>`.
 
-**Rate limit (HTTP 429)**
-- Diagnosis: `Solana::Client` retries on 429 automatically (built-in retry logic). If retries are exhausted, the call raises.
-- Fix: Reduce call frequency or switch to a paid RPC endpoint with higher rate limits. The retry lives in `Solana::Client#call`: up to `MAX_RETRIES` (3) retries after the first try, sleeping `RETRY_DELAY` times the retry number (1s, 2s, 3s). It keys on the JSON-RPC error `code` (429) in the response body, not on the HTTP status.
+**Rate limit (HTTP 429) and provider failures (HTTP 5xx)**
+- Diagnosis: `Solana::Client#call` reads the HTTP status BEFORE it parses the body, because a rate limit often comes back as plain text (Helius answers 429 with `Too many requests`). It retries HTTP 429, 500, 502, 503 and 504 (`RETRYABLE_HTTP_STATUSES`), and a JSON-RPC error `code` 429 inside an HTTP 200. When the retries run out it raises `Solana::Client::HttpError`, a `RpcError` whose `code` is the HTTP status (`e.code == 429`). Any other non-2xx raises at once, keeping the JSON-RPC error's own code and message when the body carries one, and a body that is not JSON raises `HttpError` too, never `JSON::ParserError`. Before solana-studio's Unreleased fix (after 0.12.1), a plain-text 429 raised `JSON::ParserError` on the first try and was never retried.
+- Fix: Reduce call frequency or switch to a paid RPC endpoint with higher rate limits. The budget: up to `MAX_RETRIES` (3) retries after the first try, sleeping `RETRY_DELAY` times the retry number (1s, 2s, 3s), or the server's `Retry-After` when it asks for longer (seconds or an HTTP-date, capped at `MAX_RETRY_AFTER`, 10s), plus up to `RETRY_JITTER` (half of `RETRY_DELAY`) of random jitter.
 
 **Expired blockhash on retry**
-- Diagnosis: `Solana::Client#call` retries a 429, a read timeout, a reset connection and a `Blockhash not found` answer by RE-POSTING THE SAME REQUEST. It never fetches a new blockhash, so a `sendTransaction` retry re-sends the same signed wire, and an expired one stays expired through every retry. A read timeout means the node may already have forwarded the first attempt.
+- Diagnosis: `Solana::Client#call` retries a 429, a 5xx, a read timeout, a reset connection and a `Blockhash not found` answer by RE-POSTING THE SAME REQUEST. It never fetches a new blockhash, so a `sendTransaction` retry re-sends the same signed wire, and an expired one stays expired through every retry. A read timeout means the node may already have forwarded the first attempt.
 - Fix: Rebuild with a fresh blockhash and have every signer sign again; a signed transaction cannot be re-anchored. Before rebuilding after any send-time error, look the transaction's signature up on chain (`client.confirm_transaction(signature)`), because the first attempt may have landed. `Solana::Cosign::Completer` types this: `PreflightRejected` is provably unsent, `BroadcastFailed` means reconcile first.
 
 ## Keypair Loading Errors

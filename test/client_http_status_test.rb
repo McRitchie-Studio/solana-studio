@@ -91,7 +91,8 @@ class Solana::ClientHttpStatusTest < Minitest::Test
 
     client.get_balance("W1")
 
-    assert_in_delta Solana::Client::RETRY_DELAY + 0.4, log[:sleeps].first, 1e-9
+    expected = Solana::Client::RETRY_DELAY * (1 + (0.4 * Solana::Client::RETRY_JITTER))
+    assert_in_delta expected, log[:sleeps].first, 1e-9
   end
 
   def test_retry_after_in_seconds_is_honoured
@@ -165,6 +166,18 @@ class Solana::ClientHttpStatusTest < Minitest::Test
     assert_in_delta 4.0, log[:sleeps].first, 1e-9
   end
 
+  def test_a_5xx_carrying_a_json_rpc_error_is_still_retried_on_its_status
+    # The status decides before the body: a gateway 500 wrapping a JSON-RPC
+    # "Internal error" is a provider failure, so it retries like any other 5xx.
+    body = '{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Internal error"}}'
+    client, log = scripted_client(FakeResponse.new("500", body, {}))
+
+    error = assert_raises(Solana::Client::RpcError) { client.get_balance("W1") }
+
+    assert_equal 500, error.code
+    assert_equal Solana::Client::MAX_RETRIES + 1, log[:attempts]
+  end
+
   # --- Other statuses do not retry ---------------------------------------------
 
   def test_a_plain_text_400_raises_rpc_error_400_without_retrying
@@ -197,6 +210,17 @@ class Solana::ClientHttpStatusTest < Minitest::Test
     assert_equal(-32_602, error.code)
     assert_equal "Invalid params", error.message
     refute_kind_of Solana::Client::HttpError, error
+    assert_equal 1, log[:attempts]
+  end
+
+  def test_a_non_2xx_json_body_without_an_rpc_error_raises_instead_of_returning_nil
+    # A 404 from a misrouted URL can be JSON with no "error" key. Reading its
+    # "result" would hand the caller nil, which reads as "account not found".
+    client, log = scripted_client(FakeResponse.new("404", '{"message":"route not found"}', {}))
+
+    error = assert_raises(Solana::Client::RpcError) { client.get_account_info("Entry1") }
+
+    assert_equal 404, error.code
     assert_equal 1, log[:attempts]
   end
 
