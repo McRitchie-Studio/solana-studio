@@ -96,7 +96,8 @@ module Solana
       end
 
       def validate_wait_budget!(seconds)
-        unless seconds.is_a?(Numeric) && !seconds.to_f.nan? && seconds >= 0
+        # NaN fails `>= 0`, so it is refused with the negatives.
+        unless seconds.is_a?(Numeric) && seconds >= 0
           raise ArgumentError, "wait_budget must be a non-negative number of seconds (got #{seconds.inspect})"
         end
 
