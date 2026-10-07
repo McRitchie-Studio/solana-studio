@@ -8,6 +8,9 @@ module Solana
   class Client
     class RpcError < StandardError
       attr_reader :code
+      # The CallStats of the #call that raised this error (retries, seconds
+      # waited, the budget), or nil when the error never left #call.
+      attr_accessor :call_stats
       def initialize(message, code: nil)
         @code = code
         super(message)
@@ -34,6 +37,18 @@ module Solana
     # Up to this fraction of RETRY_DELAY is added to every wait, so callers
     # throttled together do not all come back on the same tick.
     RETRY_JITTER = 0.5
+    # The most seconds one #call may spend SLEEPING between attempts, summed
+    # over every retry. MAX_RETRIES Retry-After waits at the cap come to about
+    # 31.5s, past Heroku's 30s request timeout, so a call stops and raises its
+    # last error rather than start a wait that would cross this line. It bounds
+    # the waits only, not the time each attempt spends on the wire (see
+    # #http_post's open and read timeouts). Set per client with
+    # `Client.new(wait_budget:)`, or per call with `Client.with_wait_budget`.
+    DEFAULT_WAIT_BUDGET = 15.0
+    # What one #call did: how many attempts and retries it made, the seconds it
+    # slept, the budget it ran under, and whether that budget is what stopped
+    # it. Read it from Client#last_call_stats, or from RpcError#call_stats.
+    CallStats = Struct.new(:method, :attempts, :retries, :waited, :budget, :budget_stopped, keyword_init: true)
     # HTTP statuses that mean "not processed, ask again": rate limited, or the
     # provider or a gateway in front of it failed.
     RETRYABLE_HTTP_STATUSES = [429, 500, 502, 503, 504].freeze
@@ -45,11 +60,68 @@ module Solana
     # Hostnames where plain http:// is permitted (local testing only).
     HTTP_OK_HOSTS = %w[localhost 127.0.0.1 ::1 0.0.0.0].freeze
 
-    def initialize(rpc_url: nil)
+    # The thread-local key for Client.with_wait_budget, and for the stats of
+    # the last #call this thread made.
+    WAIT_BUDGET_KEY = :solana_client_wait_budget
+    LAST_CALL_KEY = :solana_client_last_call
+
+    class << self
+      # Where #call writes one line per retry. Defaults to Rails.logger in a
+      # Rails host and to nothing elsewhere; a client's own `logger:` wins.
+      attr_writer :logger
+
+      def logger
+        return @logger if defined?(@logger)
+
+        Rails.logger if defined?(::Rails) && ::Rails.respond_to?(:logger)
+      end
+
+      # Every #call made by THIS thread (any client) inside the block runs
+      # under `seconds` of total wait instead of its client's budget. For a
+      # caller inside a web request:
+      #
+      #   Solana::Client.with_wait_budget(4) { vault.fetch_wallet_balances(addr) }
+      #
+      # Thread-scoped, so a Thread.new body must open its own block. Nesting
+      # restores the outer budget when the inner block ends.
+      def with_wait_budget(seconds)
+        seconds = validate_wait_budget!(seconds)
+        previous = Thread.current[WAIT_BUDGET_KEY]
+        begin
+          Thread.current[WAIT_BUDGET_KEY] = seconds
+          yield
+        ensure
+          Thread.current[WAIT_BUDGET_KEY] = previous
+        end
+      end
+
+      def validate_wait_budget!(seconds)
+        unless seconds.is_a?(Numeric) && !seconds.to_f.nan? && seconds >= 0
+          raise ArgumentError, "wait_budget must be a non-negative number of seconds (got #{seconds.inspect})"
+        end
+
+        seconds.to_f
+      end
+    end
+
+    attr_reader :wait_budget
+
+    def initialize(rpc_url: nil, wait_budget: DEFAULT_WAIT_BUDGET, logger: nil)
       @rpc_url = rpc_url || ENV.fetch("SOLANA_RPC_URL", DEFAULT_RPC_URL)
       @uri = URI.parse(@rpc_url)
       validate_rpc_scheme!
       @request_id = 0
+      @wait_budget = self.class.validate_wait_budget!(wait_budget)
+      @logger = logger
+    end
+
+    # The CallStats of the last #call THIS client made on THIS thread, or nil.
+    # Thread-scoped because one client is shared by request threads. A wrapper
+    # prepended over #call (turf-monster's Solana::ClientLogger) reads it after
+    # `super` returns or raises.
+    def last_call_stats
+      stats = Thread.current[LAST_CALL_KEY]
+      stats[:stats] if stats && stats[:client].equal?(self)
     end
 
     def get_account_info(pubkey, encoding: "base64", commitment: nil)
@@ -200,8 +272,12 @@ module Solana
         params: params
       }
 
-      retries = 0
+      budget = Thread.current[WAIT_BUDGET_KEY] || @wait_budget
+      stats = CallStats.new(method: method.to_s, attempts: 0, retries: 0, waited: 0.0,
+                            budget: budget, budget_stopped: false)
+      Thread.current[LAST_CALL_KEY] = { client: self, stats: stats }
       begin
+        stats.attempts += 1
         response = http_post(body)
         status = http_status(response)
         # The status first: a rate limit or gateway failure often carries a
@@ -218,21 +294,56 @@ module Solana
 
         parsed["result"]
       rescue RpcError => e
-        # Retry an HTTP 429/5xx, a JSON-RPC rate limit, or blockhash expiry.
-        if retries < MAX_RETRIES && retryable_error?(e)
-          retries += 1
-          sleep retry_delay(retries, response)
-          retry
-        end
+        # Retry an HTTP 429/5xx, a JSON-RPC rate limit, or blockhash expiry,
+        # while the wait fits the budget.
+        retry if stats.retries < MAX_RETRIES && retryable_error?(e) &&
+                 wait_for_retry(stats, retry_delay(stats.retries + 1, response), e)
+        e.call_stats = stats
         raise
       rescue Net::OpenTimeout, Net::ReadTimeout, Errno::ECONNRESET => e
-        if retries < MAX_RETRIES
-          retries += 1
-          sleep retry_delay(retries)
-          retry
-        end
-        raise RpcError.new("Network error: #{e.message}")
+        retry if stats.retries < MAX_RETRIES && wait_for_retry(stats, retry_delay(stats.retries + 1), e)
+        error = RpcError.new("Network error: #{e.message}")
+        error.call_stats = stats
+        raise error
       end
+    end
+
+    # Sleep `delay` before the next attempt and return true, or, when that
+    # sleep would carry the call's total wait past its budget, mark the stats
+    # and return false so the caller raises its last error now. Never sleeps
+    # part of a wait: a retry that cannot have its full delay is not made.
+    def wait_for_retry(stats, delay, error)
+      if stats.waited + delay > stats.budget
+        stats.budget_stopped = true
+        log_retry("stopped", stats, delay, error)
+        return false
+      end
+
+      stats.retries += 1
+      log_retry("retry", stats, delay, error)
+      sleep delay
+      stats.waited += delay
+      true
+    end
+
+    # One line per retry, and one when the budget stops a call. It names the
+    # method, the cause and the numbers only: never the RPC URL, which can
+    # carry an API key on its query string, and never a request param.
+    def log_retry(event, stats, delay, error)
+      logger = @logger || self.class.logger
+      return unless logger
+
+      cause = error.is_a?(RpcError) ? "#{error.class.name.split('::').last} #{error.code}" : error.class.name
+      line = if event == "retry"
+               format("[Solana::Client] %s retry %d/%d after %s: waiting %.2fs (%.2fs of %.2fs budget)",
+                      stats.method, stats.retries, MAX_RETRIES, cause, delay, stats.waited + delay, stats.budget)
+             else
+               format("[Solana::Client] %s wait budget spent after %d retries (%.2fs waited, next wait %.2fs, budget %.2fs): raising %s",
+                      stats.method, stats.retries, stats.waited, delay, stats.budget, cause)
+             end
+      logger.warn(line)
+    rescue StandardError
+      nil # a broken logger never changes what #call returns or raises
     end
 
     # The response's HTTP status as an Integer, or nil when the transport does
