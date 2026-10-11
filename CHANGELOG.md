@@ -4,6 +4,12 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pro
 
 ## Unreleased
 
+### Changed
+- **`solana_studio/phantom_deeplink` and `solana_studio/deeplink_assets` render the request's CSP nonce on their inline script** (`nonce=` from `content_security_policy_nonce`; no attribute for a host with no nonce generator). They now run on a host whose script-src drops `'unsafe-inline'` for a nonce, as turf-monster's signing pages do.
+
+### Tests
+- **`test/views/script_nonce_test.rb` (2, new)**: each partial's inline script carries the nonce the view hands it, and none when the view has no nonce or no `content_security_policy_nonce`.
+
 ## v0.12.4 (2026-10-07)
 
 ## v0.12.3 (2026-10-07)
