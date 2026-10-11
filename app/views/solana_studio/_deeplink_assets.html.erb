@@ -14,7 +14,10 @@
 
   Render before solana_studio/phantom_deeplink and in the callback view.
 %>
-<script>
+<%# The request's CSP nonce, or nil (no attribute) when the host sets no
+    nonce generator or renders this outside a controller. %>
+<% script_nonce = (content_security_policy_nonce if respond_to?(:content_security_policy_nonce)) %>
+<script<% if script_nonce %> nonce="<%= script_nonce %>"<% end %>>
   // NOT document.write. Under turbo-rails a Drive visit re-executes body scripts
   // at readyState === 'complete', where document.write implicitly calls
   // document.open() and BLANKS THE PAGE — on exactly the consumer this guard
