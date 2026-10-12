@@ -65,6 +65,19 @@ FileUtils.cp_r(Dir.glob(File.join(engine_js_src, "*")), engine_js_dst)
 alpine = File.join(engine_js_dst, "alpine.js")
 abort "e2e/boot: studio-engine's alpine.js did not arrive at #{alpine}" unless File.exist?(alpine)
 
+# ---- studio-engine's modal host module ---------------------------------------
+#
+# The modal host partial renders no script any more: its $store.modals stack is
+# studio/modal_host, an ES module a host's layout imports by its own tag (engine
+# layouts/studio/_head). It imports nothing, so the lab serves the installed
+# gem's file as-is and loads it as a module ahead of Alpine. Without it
+# Alpine.store('modals') is undefined and every modal spec fails at open().
+modal_host_src = File.join(engine_dir, "app", "javascript", "studio", "modal_host.js")
+abort "e2e/boot: studio-engine ships no app/javascript/studio/modal_host.js — has the modal host moved?" unless File.exist?(modal_host_src)
+engine_module_dst = File.join(PUBLIC_DIR, "js", "studio_modules")
+FileUtils.mkdir_p(engine_module_dst)
+FileUtils.cp(modal_host_src, File.join(engine_module_dst, "modal_host.js"))
+
 # ---- Serve -------------------------------------------------------------------
 ENV["RAILS_ENV"] ||= "test"
 require_relative "../test/dummy/config/environment"

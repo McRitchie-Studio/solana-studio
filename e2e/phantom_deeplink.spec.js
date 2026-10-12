@@ -225,6 +225,42 @@ test.describe("phantom deep link", () => {
     expect(errors).toEqual([]);
   });
 
+  // UNDER AN ENFORCED NONCE-ONLY script-src, the policy turf-monster's signing
+  // pages send. The partial's inline script runs there only if it carries the
+  // request's nonce; refused, the entry point is never defined and the picker
+  // drops its mobile Phantom row with nothing in the log but a CSP violation.
+  //
+  // The header check proves the page really is strict (no 'unsafe-inline', a
+  // nonce present, not report-only), so a green here cannot come from a policy
+  // that admits every inline script. CONTROL, run by hand: with the nonce
+  // attribute removed from _phantom_deeplink this spec reads "undefined" and
+  // records the script-src-elem violation.
+  test("under an enforced nonce-only script-src the entry point is still defined", async ({ page }) => {
+    const errors = watchPageErrors(page);
+    await page.addInitScript(() => {
+      window.__cspViolations = [];
+      document.addEventListener("securitypolicyviolation", (e) => {
+        window.__cspViolations.push(`${e.violatedDirective} ${e.blockedURI}`);
+      });
+    });
+    const response = await page.goto("/lab/phantom_deeplink?deeplink=1&strict=1");
+
+    const policy = response.headers()["content-security-policy"];
+    expect(policy).toMatch(/script-src 'self' 'nonce-[^']+'/);
+    expect(policy).not.toContain("unsafe-inline");
+    expect(response.headers()["content-security-policy-report-only"]).toBeUndefined();
+
+    await expect(page.locator('[data-test="deeplink-state"]')).toHaveAttribute("data-deeplink", "true");
+    await expect.poll(() => page.evaluate(() => typeof startPhantomDeepLink)).toBe("function");
+    expect(await page.evaluate(() => window.__cspViolations.filter((v) => v.includes("inline")))).toEqual([]);
+
+    // The layout's Alpine evaluates the bare x-data on <body> with new Function,
+    // which a policy without 'unsafe-eval' refuses. That is the lab's Alpine, not
+    // this gem's script (the deep link evaluates no strings), so it is the one
+    // error excused here, by its own words.
+    expect(errors.filter((e) => !e.includes("'unsafe-eval' is not an allowed source"))).toEqual([]);
+  });
+
   // THE NEGATIVE CONTROL for the probe the first spec uses. Same lab, same layout,
   // same load, same evaluation — only the partial is absent. If that probe were
   // measuring something ambient rather than this partial's program, it would read

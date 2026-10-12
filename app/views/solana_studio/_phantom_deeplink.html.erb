@@ -54,7 +54,10 @@
   Requires tweetnacl (window.nacl); render "solana_studio/deeplink_assets"
   first, or supply it yourself.
 %>
-<script>
+<%# The request's CSP nonce, or nil (no attribute) when the host sets no
+    nonce generator or renders this outside a controller. %>
+<% script_nonce = (content_security_policy_nonce if respond_to?(:content_security_policy_nonce)) %>
+<script<% if script_nonce %> nonce="<%= script_nonce %>"<% end %>>
   (function () {
     var STATEMENT = <%= Studio.wallet_sign_in_statement.to_json.html_safe %>;
 

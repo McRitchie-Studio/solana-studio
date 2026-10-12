@@ -4,6 +4,14 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pro
 
 ## Unreleased
 
+### Changed
+- **`solana_studio/phantom_deeplink` and `solana_studio/deeplink_assets` render the request's CSP nonce on their inline script** (`nonce=` from `content_security_policy_nonce`; no attribute for a host with no nonce generator). They now run on a host whose script-src drops `'unsafe-inline'` for a nonce, as turf-monster's signing pages do.
+
+### Tests
+- **`test/views/script_nonce_test.rb` (2, new)**: each partial's inline script carries the nonce the view hands it, and none when the view has no nonce or no `content_security_policy_nonce`.
+- **`e2e/phantom_deeplink.spec.js` (+1)**: under an enforced nonce-only `script-src` (the lab's `?strict=1`, the policy turf-monster's signing pages send) the deep link still defines `startPhantomDeepLink` with no inline-script violation. Control: the un-nonced partial reads `undefined`.
+- **The browser lab loads studio-engine's `studio/modal_host` module.** The engine's modal host partial stopped rendering its store inline, so every lab modal spec failed at `Alpine.store('modals').open`; `e2e/boot.rb` now serves the installed gem's `modal_host.js` and the lab layout imports it ahead of Alpine.
+
 ## v0.12.4 (2026-10-07)
 
 ## v0.12.3 (2026-10-07)

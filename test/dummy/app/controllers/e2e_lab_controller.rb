@@ -46,7 +46,13 @@ class E2eLabController < ActionController::Base
   #
   # No ivar of its own: the deep link reads its cluster off the body's
   # data-solana-cluster, which the LAYOUT publishes exactly as a host does.
+  #
+  # ?strict=1 serves the page under an ENFORCED nonce-only script-src, the policy
+  # turf-monster's signing pages send: no 'unsafe-inline', so an inline script
+  # runs only if it carries this request's nonce. That is the host setting the
+  # page's policy, which is the host's job, not the lab reimplementing the gem.
   def phantom_deeplink
+    enforce_nonce_only_scripts! if params[:strict] == "1"
     @network_json = Solana::Network.describe(LAB_CLUSTER, environment: LAB_ENVIRONMENT).to_json
   end
 
@@ -71,5 +77,18 @@ class E2eLabController < ActionController::Base
   # reports, as a host's navbar does. The wallets come from the spec.
   def wallet_identity
     @network_json = Solana::Network.describe(LAB_CLUSTER, environment: LAB_ENVIRONMENT).to_json
+  end
+
+  private
+
+  # A per-request policy, enforced (not report-only), with a fresh nonce on
+  # script-src. 'self' admits the layout's same-origin <script src> files; an
+  # inline script is admitted only by the nonce content_security_policy_nonce
+  # hands the view.
+  def enforce_nonce_only_scripts!
+    request.content_security_policy = ActionDispatch::ContentSecurityPolicy.new { |policy| policy.script_src :self }
+    request.content_security_policy_nonce_generator = ->(_request) { SecureRandom.base64(16) }
+    request.content_security_policy_nonce_directives = %w[script-src]
+    request.content_security_policy_report_only = false
   end
 end

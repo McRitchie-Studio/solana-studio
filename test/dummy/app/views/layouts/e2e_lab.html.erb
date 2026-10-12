@@ -7,8 +7,9 @@
 
     Alpine and the guard both arrive by <script src>, pointing at the real files
     e2e/boot.rb copied into public/e2e. Alpine is DEFERRED so the modal host's
-    store registration (which runs inline, in the host partial) lands first —
-    the host's own comment explains why that order is load-bearing. %>
+    store registration (studio/modal_host, loaded as a module in the head) binds
+    alpine:init first — the module's own comment explains why that order is
+    load-bearing. %>
 <!DOCTYPE html>
 <html lang="en" class="dark">
   <head>
@@ -30,6 +31,11 @@
     <%# The wallet identity source. Inert until a page calls register(), so every
         lab page can carry it. %>
     <script src="/e2e/js/solana_studio/wallet_identity.js"></script>
+    <%# studio-engine's modal stack ($store.modals), the module the engine's own
+        layouts/studio/_head imports. A module script is deferred and runs in
+        document order, so it binds alpine:init before the deferred Alpine at the
+        foot of the body starts. %>
+    <script type="module" src="/e2e/js/studio_modules/modal_host.js"></script>
   </head>
   <%# `x-data` ON THE BODY is a HOST responsibility, not decoration.
       studio-engine's modal host roots itself at a bare
