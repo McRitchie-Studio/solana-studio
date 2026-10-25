@@ -4,6 +4,8 @@ require_relative "view_render_support"
 require "json"
 require "tempfile"
 require "open3"
+require "digest"
+require "base64"
 
 # [unit] Every remote script this gem's views load carries a sha384 integrity
 # and crossorigin="anonymous", so a CDN that serves different bytes for the
@@ -21,6 +23,7 @@ require "open3"
 # `curl -sSfL <URL> | openssl dgst -sha384 -binary | openssl base64 -A`
 # against the live jsDelivr file, and matched the nacl-fast.min.js inside the
 # npm tarball tweetnacl-1.0.3.tgz.
+# test_installed_tweetnacl_hashes_to_the_pinned_sri re-derives it offline on every run.
 class RemoteScriptIntegrityTest < Minitest::Test
   include ViewRenderSupport
 
@@ -109,6 +112,25 @@ class RemoteScriptIntegrityTest < Minitest::Test
   # reading a real append rather than one the stub forced.
   def test_appends_nothing_when_the_host_already_supplies_nacl
     assert_empty appended_scripts("solana_studio/deeplink_assets", nacl_present: true)
+  end
+
+  # The node lane (test/*_js_test.rb, e2e/boot.rb) runs node_modules' tweetnacl
+  # while production runs the CDN file, so both must be the same release. The
+  # expected version is READ from package.json, never copied here, and must be an
+  # exact version: a caret range would let `npm install` drift away from the CDN.
+  def test_package_json_pins_the_cdn_tweetnacl_version_exactly
+    spec = JSON.parse(File.read(File.join(ROOT, "package.json"))).dig("devDependencies", "tweetnacl")
+    assert_match(/\A\d+\.\d+\.\d+\z/, spec.to_s, "package.json tweetnacl must be an exact version, not #{spec.inspect}")
+    cdn_version = NACL_URL[%r{/tweetnacl@([^/]+)/}, 1]
+    assert_equal spec, cdn_version, "package.json tweetnacl and the deeplink_assets CDN URL disagree"
+  end
+
+  # The bytes npm installs from the lockfile (sha512-checked by npm ci) are the
+  # bytes the SRI pins. FAILS rather than skips without node_modules.
+  def test_installed_tweetnacl_hashes_to_the_pinned_sri
+    file = File.join(ROOT, "node_modules/tweetnacl/nacl-fast.min.js")
+    assert File.exist?(file), "tweetnacl is not installed - run `npm ci` in the gem root"
+    assert_equal NACL_SRI, "sha384-#{Base64.strict_encode64(Digest::SHA384.digest(File.binread(file)))}"
   end
 
   def test_every_remote_script_in_the_views_is_covered
