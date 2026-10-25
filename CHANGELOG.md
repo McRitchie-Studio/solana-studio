@@ -4,6 +4,9 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pro
 
 ## Unreleased
 
+### Tests
+- **`test/views/remote_script_integrity_test.rb` (4, new): the tweetnacl pin in `solana_studio/deeplink_assets` is now guarded.** The partial has pinned `tweetnacl@1.0.3/nacl-fast.min.js` with a sha384 `integrity` and `crossOrigin = 'anonymous'` since 0.10.0, but no test asserted either, so deleting the line would have shipped green. The suite renders the partial, runs its inline script under node against a stub `document`, and asserts that the one element it appends carries the pinned sha384 and `crossorigin="anonymous"`. A control proves the append is real: nothing is appended when the host already supplies `window.nacl`. It also scans every view under `app/views` for remote `.js` URLs and fails on any not covered; tweetnacl is the only one. The pin was recomputed on 2026-10-24 against the live jsDelivr file and the npm tarball, and both give the committed value. 5 mutants, all KILLED: the integrity line removed, `crossOrigin` removed, one hash character changed, integrity set on a different object, and a new unpinned remote `<script src>` added.
+
 ## v0.13.0 (2026-10-12)
 
 ### Changed
