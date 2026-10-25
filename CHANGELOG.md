@@ -4,6 +4,8 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pro
 
 ## Unreleased
 
+## v0.13.1 (2026-10-25)
+
 ### Changed
 - **The browser and node lanes pin tweetnacl to exactly 1.0.3** (`package.json`, `package-lock.json`). It was `^1.0.3`, a range, while production loads the exact `tweetnacl@1.0.3` CDN file, so an `npm install` could have tested different bytes from the ones a phone runs. Development and test only; the gem's runtime dependencies are unchanged.
 
