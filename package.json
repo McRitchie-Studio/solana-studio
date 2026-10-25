@@ -7,6 +7,6 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",
-    "tweetnacl": "^1.0.3"
+    "tweetnacl": "1.0.3"
   }
 }

@@ -4,6 +4,12 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pro
 
 ## Unreleased
 
+### Changed
+- **The browser and node lanes pin tweetnacl to exactly 1.0.3** (`package.json`, `package-lock.json`). It was `^1.0.3`, a range, while production loads the exact `tweetnacl@1.0.3` CDN file, so an `npm install` could have tested different bytes from the ones a phone runs. Development and test only; the gem's runtime dependencies are unchanged.
+
+### Tests
+- **`test/views/remote_script_integrity_test.rb` (6, new): the tweetnacl pin in `solana_studio/deeplink_assets` is now guarded.** The partial has pinned `tweetnacl@1.0.3/nacl-fast.min.js` with a sha384 `integrity` and `crossOrigin = 'anonymous'` since 0.10.0, but no test asserted either, so deleting the line would have shipped green. The suite renders the partial, runs its inline script under node against a stub `document`, and asserts that the one element it appends carries the pinned sha384 and `crossorigin="anonymous"`. A control proves the append is real: nothing is appended when the host already supplies `window.nacl`. It also scans every view under `app/views` for remote `.js` URLs and fails on any not covered; tweetnacl is the only one. The pin was recomputed on 2026-10-24 against the live jsDelivr file and the npm tarball, and both give the committed value. Two more tests tie the lanes together. The tweetnacl version in `package.json` must be exact and must equal the version in the CDN URL; the test reads it from `package.json` rather than copying it. The installed `node_modules/tweetnacl/nacl-fast.min.js` must hash to the pinned SRI, which re-derives the pin offline on every run. 8 mutants, all KILLED: the integrity line removed, `crossOrigin` removed, one hash character changed, integrity set on a different object, a new unpinned remote `<script src>` added, `package.json` back to `^1.0.3`, `package.json` at 1.0.2, and the installed file's bytes changed.
+
 ## v0.13.0 (2026-10-12)
 
 ### Changed
