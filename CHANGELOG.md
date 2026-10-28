@@ -4,6 +4,15 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pro
 
 ## Unreleased
 
+### Changed
+- **`.gitignore` ignores `/.npmrc`.** The hub's `bin/agent-worktree` writes a
+  desk-local `.npmrc` (the npm script guard) before it links a desk's
+  `node_modules` to the primary's; unignored, that file would dirty the desk, so
+  desks fell back to `npm ci`. Development only; the packaged gem is unchanged.
+- **`.gitignore` ignores `node_modules` with no trailing slash.** `node_modules/`
+  matches only a directory, so a `node_modules` symlink could be staged; the bare
+  pattern covers both, as turf-monster, studio-engine and the hub already do.
+
 ## v0.13.1 (2026-10-25)
 
 ### Changed
