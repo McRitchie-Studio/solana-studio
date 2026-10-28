@@ -4,6 +4,12 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pro
 
 ## Unreleased
 
+### Changed
+- **`.gitignore` ignores `/.npmrc`.** The hub's `bin/agent-worktree` writes a
+  desk-local `.npmrc` (the npm script guard) before it links a desk's
+  `node_modules` to the primary's; unignored, that file would dirty the desk, so
+  desks fell back to `npm ci`. Development only; the packaged gem is unchanged.
+
 ## v0.13.1 (2026-10-25)
 
 ### Changed
